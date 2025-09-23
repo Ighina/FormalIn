@@ -1,0 +1,43 @@
+# Example configuration for FormalIn
+# This file demonstrates the various configuration options available
+
+# Natural Language Verification model configuration
+nlv_model:
+  provider: "ollama"           # "ollama" or "huggingface"
+  name: "llama3.1"            # Model name
+  params: {}                  # Additional model parameters
+
+# Formal proof generation model configuration
+formal_model:
+  provider: "huggingface"
+  name: "fm-universe/deepseek-coder-7b-instruct-v1.5-fma"
+  params:
+    # torch_dtype: "auto"
+    # device_map: "auto"
+
+# Dataset configuration
+dataset:
+  type: "formalstep"          # "formalstep" or "custom"
+  max_items: 5                # Limit number of items to process
+  params: {}                  # Additional dataset parameters
+
+# Pipeline configuration
+pipeline:
+  formal_language: "lean"     # Target formal language
+  nlv_template: "structured"  # NLV prompt template: "default", "detailed", or "structured"
+  formal_template: "step"     # Formal template: "default", "concise", "verbose", or "step"
+  streaming: false            # Process items one by one vs batch
+  batch_size: 1              # Batch size for processing
+
+# Generation parameters for NLV step
+nlv_generation_params: {}
+
+# Generation parameters for formal proof step
+formal_generation_params:
+  temperature: 0.2
+  top_p: 0.9
+  max_tokens: 512
+
+# Output configuration
+output_file: "results.json"   # Output file path
+output_format: "json"        # "json" or "jsonl"
