@@ -32,25 +32,26 @@ class HuggingFaceProvider(BaseLLMProvider):
         return self.model is not None and self.tokenizer is not None
 
     def _load_model(self):
-        """Load the HuggingFace model and tokenizer."""
+        """Load the HuggingFace model and tokenizer with optimizations."""
         if not HF_AVAILABLE:
             return
 
         try:
             logger.info(f"Loading HuggingFace model: {self.model_name}")
+            
+            # Use half precision for faster inference
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
-                torch_dtype="auto",
+                torch_dtype=torch.float16,  # Instead of "auto"
                 device_map="auto",
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,  # Reduce memory usage during loading
                 **self.kwargs
             )
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-
-            # Set pad token if not exists
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-
-            logger.info(f"Successfully loaded model: {self.model_name}")
+            
+            # Enable attention optimization if available
+            if hasattr(self.model, 'half'):
+                self.model = self.model.half()
         except Exception as e:
             logger.error(f"Error loading HuggingFace model {self.model_name}: {e}")
             self.model = None
@@ -78,8 +79,13 @@ class HuggingFaceProvider(BaseLLMProvider):
             gen_params = self.get_default_generation_params()
             gen_params.update(generation_kwargs)
 
-            # Generate
+            # Generation optimizations
             with torch.no_grad():
+                # Use torch.compile for PyTorch 2.0+ (significant speedup)
+                if hasattr(torch, 'compile') and not hasattr(self.model, '_compiled'):
+                    self.model = torch.compile(self.model)
+                    self.model._compiled = True
+                
                 generated_ids = self.model.generate(
                     **model_inputs,
                     max_new_tokens=gen_params.get("max_tokens", 512),
@@ -87,6 +93,8 @@ class HuggingFaceProvider(BaseLLMProvider):
                     top_p=gen_params.get("top_p", 0.9),
                     do_sample=gen_params.get("temperature", 0.2) > 0,
                     pad_token_id=self.tokenizer.eos_token_id,
+                    use_cache=True,  # Enable KV cache
+                    num_beams=1,     # Use greedy search for speed
                 )
 
             # Remove prompt tokens
