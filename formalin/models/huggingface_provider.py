@@ -52,6 +52,14 @@ class HuggingFaceProvider(BaseLLMProvider):
             # Enable attention optimization if available
             if hasattr(self.model, 'half'):
                 self.model = self.model.half()
+
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+
+            # Set pad token if not exists
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+
+            logger.info(f"Successfully loaded model: {self.model_name}")
         except Exception as e:
             logger.error(f"Error loading HuggingFace model {self.model_name}: {e}")
             self.model = None
