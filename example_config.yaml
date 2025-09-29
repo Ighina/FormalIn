@@ -25,7 +25,7 @@ dataset:
 pipeline:
   formal_language: "lean"     # Target formal language
   nlv_template: "structured"  # NLV prompt template: "default", "detailed", or "structured"
-  formal_template: "step"     # Formal template: "default", "concise", "verbose", or "step"
+  formal_template: "in-context-lean"     # Formal template: "default", "concise", "verbose", or "step"
   streaming: false            # Process items one by one vs batch
   batch_size: 1              # Batch size for processing
 

@@ -2,10 +2,17 @@
 
 from typing import Dict, Type
 from .templates import (
-    NLVTemplate, FormalTemplate,
-    DEFAULT_NLV_TEMPLATE, DEFAULT_FORMAL_TEMPLATE,
-    DETAILED_NLV_TEMPLATE, CONCISE_FORMAL_TEMPLATE, VERBOSE_FORMAL_TEMPLATE,
-    STRUCTURED_NLV_TEMPLATE, STEP_FORMAL_TEMPLATE, STEP_LEAN_TEMPLATE
+    NLVTemplate,
+    FormalTemplate,
+    DEFAULT_NLV_TEMPLATE,
+    DEFAULT_FORMAL_TEMPLATE,
+    DETAILED_NLV_TEMPLATE,
+    CONCISE_FORMAL_TEMPLATE,
+    VERBOSE_FORMAL_TEMPLATE,
+    STRUCTURED_NLV_TEMPLATE,
+    STEP_FORMAL_TEMPLATE,
+    STEP_LEAN_TEMPLATE,
+    IN_CONTEXT_LEAN_TEMPLATE,
 )
 
 
@@ -24,19 +31,24 @@ class PromptRegistry:
             "concise": FormalTemplate(CONCISE_FORMAL_TEMPLATE),
             "verbose": FormalTemplate(VERBOSE_FORMAL_TEMPLATE),
             "step": FormalTemplate(STEP_FORMAL_TEMPLATE),
-            "lean": FormalTemplate(STEP_LEAN_TEMPLATE)
+            "lean": FormalTemplate(STEP_LEAN_TEMPLATE),
+            "in-context-lean": FormalTemplate(IN_CONTEXT_LEAN_TEMPLATE),
         }
 
     def get_nlv_template(self, name: str = "default") -> NLVTemplate:
         """Get natural language verification template by name."""
         if name not in self._nlv_templates:
-            raise ValueError(f"NLV template '{name}' not found. Available: {list(self._nlv_templates.keys())}")
+            raise ValueError(
+                f"NLV template '{name}' not found. Available: {list(self._nlv_templates.keys())}"
+            )
         return self._nlv_templates[name]
 
     def get_formal_template(self, name: str = "default") -> FormalTemplate:
         """Get formal verification template by name."""
         if name not in self._formal_templates:
-            raise ValueError(f"Formal template '{name}' not found. Available: {list(self._formal_templates.keys())}")
+            raise ValueError(
+                f"Formal template '{name}' not found. Available: {list(self._formal_templates.keys())}"
+            )
         return self._formal_templates[name]
 
     def register_nlv_template(self, name: str, template: str):
@@ -51,5 +63,5 @@ class PromptRegistry:
         """List all available templates."""
         return {
             "nlv": list(self._nlv_templates.keys()),
-            "formal": list(self._formal_templates.keys())
+            "formal": list(self._formal_templates.keys()),
         }
