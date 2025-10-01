@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VerificationStep:
     """Represents a single verification step."""
+
     step_number: int
     title: str
     what_to_verify: str
@@ -32,6 +33,7 @@ class VerificationStep:
 @dataclass
 class StepwiseResult(VerificationResult):
     """Result with step-by-step breakdown."""
+
     verification_steps: List[VerificationStep] = None
 
     def __post_init__(self):
@@ -65,6 +67,8 @@ class StepwisePipeline:
         formal_provider: BaseLLMProvider,
         prompt_registry: Optional[PromptRegistry] = None,
         formal_language: str = "lean",
+        nlv_template: str = "structured",
+        formal_template: str = "step",
     ):
         """
         Initialize the stepwise pipeline.
@@ -81,20 +85,36 @@ class StepwisePipeline:
         self.formal_language = formal_language
 
         # Get templates
-        self.nlv_template = self.prompt_registry.get_nlv_template("structured")
-        self.formal_template = self.prompt_registry.get_formal_template("step")
+        try:
+            self.nlv_template = self.prompt_registry.get_nlv_template(nlv_template)
+        except ValueError:
+            logger.warning(
+                f"NLV template '{nlv_template}' not found. Using default 'structured'."
+            )
+            self.nlv_template = self.prompt_registry.get_nlv_template("structured")
+        try:
+            self.formal_template = self.prompt_registry.get_formal_template(
+                formal_template
+            )
+        except ValueError:
+            logger.warning(
+                f"Formal template '{formal_template}' not found. Using default 'step'."
+            )
+            self.formal_template = self.prompt_registry.get_formal_template("step")
 
     def parse_structured_verification(self, nlv_text: str) -> List[VerificationStep]:
         """Parse structured NLV output into verification steps."""
         steps = []
 
         # Pattern to match step sections
-        step_pattern = r'## STEP (\d+|FINAL STEP): (.+?)\n\*\*What to verify:\*\* (.+?)\n\*\*How to verify:\*\* (.+?)\n\*\*Required concepts:\*\* (.+?)(?=\n##|\n\n|\Z)'
+        step_pattern = r"## STEP (\d+|FINAL STEP): (.+?)\n\*\*What to verify:\*\* (.+?)\n\*\*How to verify:\*\* (.+?)\n\*\*Required concepts:\*\* (.+?)(?=\n##|\n\n|\Z)"
 
         matches = re.findall(step_pattern, nlv_text, re.DOTALL | re.IGNORECASE)
 
         for match in matches:
-            step_num_str, title, what_to_verify, how_to_verify, required_concepts = match
+            step_num_str, title, what_to_verify, how_to_verify, required_concepts = (
+                match
+            )
 
             # Handle "FINAL STEP" case
             if step_num_str == "FINAL STEP":
@@ -115,13 +135,15 @@ class StepwisePipeline:
         if not steps:
             logger.warning("Could not parse structured verification into steps")
             # Fallback: create a single step with the entire text
-            steps.append(VerificationStep(
-                step_number=1,
-                title="Complete Verification",
-                what_to_verify="Complete verification of the solution",
-                how_to_verify=nlv_text,
-                required_concepts="Various mathematical concepts",
-            ))
+            steps.append(
+                VerificationStep(
+                    step_number=1,
+                    title="Complete Verification",
+                    what_to_verify="Complete verification of the solution",
+                    how_to_verify=nlv_text,
+                    required_concepts="Various mathematical concepts",
+                )
+            )
 
         logger.info(f"Parsed {len(steps)} verification steps")
         return steps
@@ -137,8 +159,7 @@ Required concepts: {step.required_concepts}
 """
 
         formal_prompt = self.formal_template.format(
-            language=self.formal_language,
-            input_text=step_input.strip()
+            language=self.formal_language, input_text=step_input.strip()
         )
 
         try:
@@ -172,10 +193,11 @@ Required concepts: {step.required_concepts}
 
         try:
             # Step 1: Generate structured NLV
-            logger.debug(f"Generating structured NLV for problem: {item.problem[:100]}...")
+            logger.debug(
+                f"Generating structured NLV for problem: {item.problem[:100]}..."
+            )
             nlv_prompt = self.nlv_template.format(
-                problem=item.problem,
-                solution=item.solution
+                problem=item.problem, solution=item.solution
             )
             nlv_text = self.nlv_provider.generate(nlv_prompt, **nlv_params)
 
@@ -191,10 +213,13 @@ Required concepts: {step.required_concepts}
                     step.formal_code = self.formalize_step(step, **formal_params)
 
             # Combine all formal code
-            formal_proof = "\n\n".join([
-                f"-- Step {step.step_number}: {step.title}\n{step.formal_code}"
-                for step in verification_steps if step.formal_code
-            ])
+            formal_proof = "\n\n".join(
+                [
+                    f"-- Step {step.step_number}: {step.title}\n{step.formal_code}"
+                    for step in verification_steps
+                    if step.formal_code
+                ]
+            )
 
             # Create result
             result = StepwiseResult(
@@ -236,11 +261,17 @@ Required concepts: {step.required_concepts}
         return {
             "total_steps": len(result.verification_steps),
             "step_titles": [step.title for step in result.verification_steps],
-            "formalized_steps": len([s for s in result.verification_steps if s.formal_code]),
-            "concepts_used": list(set([
-                concept.strip()
-                for step in result.verification_steps
-                for concept in step.required_concepts.split(',')
-                if concept.strip()
-            ])),
+            "formalized_steps": len(
+                [s for s in result.verification_steps if s.formal_code]
+            ),
+            "concepts_used": list(
+                set(
+                    [
+                        concept.strip()
+                        for step in result.verification_steps
+                        for concept in step.required_concepts.split(",")
+                        if concept.strip()
+                    ]
+                )
+            ),
         }

@@ -186,6 +186,40 @@ def parse_lean_file(file_path):
         return False
 
 
+def postprocess_lean(lean_code: str) -> str:
+    """
+    Postprocess Lean code to avoid common errors
+
+    Args:
+        lean_code: the input lean code as a string
+
+    Returns:
+        the postprocessed lean code
+    """
+    # 1. Remove all occurrences of triple backticks
+    processed = lean_code.replace("```", "")
+
+    # 2. Remove "lean" at the very beginning (strip leading spaces first)
+    processed = processed.lstrip()
+    if processed.startswith("lean"):
+        processed = processed[len("lean") :].lstrip()
+
+    # 3. Remove lines starting with "import "
+    lines = processed.splitlines()
+    lines = [
+        line
+        for line in lines
+        if not line.strip().startswith("import ") or line.startswith("open")
+    ]
+
+    # 4. Ensure string starts with "import Mathlib"
+    processed = "\n".join(lines).lstrip()
+    if not processed.startswith("import Mathlib"):
+        processed = "import Mathlib\n" + processed
+
+    return processed
+
+
 def lean_compile_success(
     result_file: str, lean_project: str, clean: bool = True
 ) -> Dict[str, float]:
@@ -213,9 +247,11 @@ def lean_compile_success(
     with open(result_file) as f:
         results = json.load(f)
 
-    if not os.path.exists(f"{lean_project}/step_formalizations"):
+    os.chdir(lean_project)
+
+    if not os.path.exists(f"step_formalizations"):
         os.makedirs(
-            f"{lean_project}/step_formalizations",
+            f"step_formalizations",
             exist_ok=True,
         )
 
@@ -235,24 +271,23 @@ def lean_compile_success(
             if whole_solution_correct:
                 correct_solution_counter += 1
 
-        if not os.path.exists(f"{lean_project}/step_formalizations/{unique_id}"):
+        if not os.path.exists(f"step_formalizations/{unique_id}"):
 
             os.makedirs(
-                f"{lean_project}/step_formalizations/{unique_id}",
+                f"step_formalizations/{unique_id}",
                 exist_ok=True,
             )
 
-        for idx, step in enumerate(results["verification_steps"]):
-            file_name = (
-                f"{lean_project}/step_formalizations/{unique_id}/step_{idx}.lean"
-            )
+        for idx, step in enumerate(result["verification_steps"]):
+            file_name = f"step_formalizations/{unique_id}/step_{idx}.lean"
 
             with open(file_name, "w") as f:
-                f.write(step["formal_code"])
+                f.write(postprocess_lean(step["formal_code"]))
 
             parsed = parse_lean_file(file_path=file_name)
 
             if parsed:
+                print("CORRECT!")
                 correct_steps += 1
                 if unique_id != prev_id:
                     whole_solution_correct = True
