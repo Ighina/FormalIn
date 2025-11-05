@@ -7,6 +7,8 @@ from pathlib import Path
 from .base import BaseDatasetLoader
 from .formalstep_loader import FormalStepLoader
 from .custom_loader import CustomDatasetLoader
+from .gsm8k_loader import GSM8KLoader
+from .processbench_loader import ProcessBench
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +17,8 @@ class DatasetFactory:
     """Factory for creating dataset loaders."""
 
     _loaders: Dict[str, Type[BaseDatasetLoader]] = {
+        "gsm8k": GSM8KLoader,
+        "processbench": ProcessBench,
         "formalstep": FormalStepLoader,
         "custom": CustomDatasetLoader,
     }
