@@ -166,6 +166,7 @@ class FormalStepVerificationPipeline:
 
             except Exception as e:
                 logger.error(f"Error processing item: {e}")
+                print(nlv_explanation)
                 # Return partial result with error information
                 result = VerificationResult(
                     problem=item.problem,
