@@ -62,11 +62,7 @@ class StepVerificationResult:
     Verification Results by Individual Step
     """
 
-    steps: List[VerificationResult] = None
-
-    def __post__init__(self):
-        if self.steps is None:
-            self.steps = []
+    steps: List[VerificationResult] = []
 
     def to_dict(self) -> Dict[str, Any]:
         base_dict = {"steps": [r.to_dict() for r in self.steps]}
