@@ -137,7 +137,7 @@ class FormalStepVerificationPipeline:
 
                 # Prompts like the default one might include the option to output False if the current
                 # step can not be converted in a formal statement
-                if re.findall(nlv_explanation, "False"):
+                if re.findall("False", nlv_explanation):
                     formal_proof = ""
                 else:
                     # Step 2: Generate formal proof
@@ -166,12 +166,11 @@ class FormalStepVerificationPipeline:
 
             except Exception as e:
                 logger.error(f"Error processing item: {e}")
-                print(nlv_explanation)
                 # Return partial result with error information
                 result = VerificationResult(
                     problem=item.problem,
                     solution=item.solution,
-                    nlv_explanation=f"ERROR: {str(e)}",
+                    nlv_explanation=nlv_explanation,
                     formal_proof="",
                     metadata={**item.metadata, "error": str(e)},
                     nlv_model=self.nlv_provider.model_name,
