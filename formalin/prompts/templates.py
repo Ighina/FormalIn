@@ -39,9 +39,9 @@ class SafeFormalTemplate(PromptTemplate):
     """Template for formalization in Safe-paper style"""
 
     def format(self, problem:str, previous_steps:str, current_step:str) -> str:
-        templ = re.sub(r"<problem>", problem, self.template)
-        templ = re.sub(r"<previous_steps>", previous_steps, templ)
-        return re.sub(r"<current_step>", current_step, templ)
+        templ = re.sub("<problem>", problem, self.template)
+        templ = re.sub("<previous_steps>", previous_steps, templ)
+        return re.sub("<current_step>", current_step, templ)
 
 # Default templates
 DEFAULT_NLV_TEMPLATE = """Explain in plain and exact language how to formally verify that the solution to the problem provided below is indeed correct.
