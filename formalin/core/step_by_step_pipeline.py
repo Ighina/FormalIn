@@ -128,7 +128,7 @@ class FormalStepVerificationPipeline:
         step_results = StepVerificationResult()
         assert isinstance(item["solution"], list), "This pipeline requires a list of reasoning step as input!"
         previous_steps = ""
-        for step in item["solution"]:
+        for step in item.solution:
             try:
                 # Step 1: Generate natural language verification
                 logger.debug(f"Generating NLV for problem: {item.problem[:100]}...")
@@ -155,7 +155,7 @@ class FormalStepVerificationPipeline:
                 # Create result
                 result = VerificationResult(
                     problem=item.problem,
-                    solution=item.solution,
+                    solution=step,
                     nlv_explanation=nlv_explanation,
                     formal_proof=formal_proof,
                     metadata=item.metadata.copy(),

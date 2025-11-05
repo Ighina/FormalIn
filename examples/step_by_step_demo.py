@@ -6,6 +6,7 @@ This script demonstrates how to use the StepwisePipeline to generate
 structured verification that can be formalized step by step.
 """
 
+import json
 import logging
 from pathlib import Path
 import sys
