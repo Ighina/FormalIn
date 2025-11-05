@@ -126,7 +126,7 @@ class FormalStepVerificationPipeline:
         nlv_params = nlv_params or {}
         formal_params = formal_params or {}
         step_results = StepVerificationResult()
-        assert isinstance(item["solution"], list), "This pipeline requires a list of reasoning step as input!"
+        assert isinstance(item.solution, list), "This pipeline requires a list of reasoning step as input!"
         previous_steps = ""
         for step in item.solution:
             try:
