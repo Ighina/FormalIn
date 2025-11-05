@@ -5,6 +5,7 @@ from .templates import (
     NLVTemplate,
     FormalTemplate,
     SafeFormalTemplate,
+    ProverTemplate,
     DEFAULT_NLV_TEMPLATE,
     DEFAULT_FORMAL_TEMPLATE,
     DETAILED_NLV_TEMPLATE,
@@ -37,7 +38,7 @@ class PromptRegistry:
             "step": FormalTemplate(STEP_FORMAL_TEMPLATE),
             "lean": FormalTemplate(STEP_LEAN_TEMPLATE),
             "in-context-lean": FormalTemplate(IN_CONTEXT_LEAN_TEMPLATE),
-            "prover": FormalTemplate(PROVER_TEMPLATE)
+            "prover": ProverTemplate(PROVER_TEMPLATE)
         }
 
     def get_nlv_template(self, name: str = "default") -> NLVTemplate:
