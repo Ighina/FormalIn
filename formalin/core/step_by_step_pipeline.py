@@ -61,8 +61,8 @@ class StepVerificationResult:
     """
     Verification Results by Individual Step
     """
-
-    steps: List[VerificationResult] = []
+    def __init__(self):
+        self.steps = []
 
     def to_dict(self) -> Dict[str, Any]:
         base_dict = {"steps": [r.to_dict() for r in self.steps]}
