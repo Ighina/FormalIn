@@ -4,6 +4,7 @@ from typing import Dict, Type
 from .templates import (
     NLVTemplate,
     FormalTemplate,
+    SafeFormalTemplate,
     DEFAULT_NLV_TEMPLATE,
     DEFAULT_FORMAL_TEMPLATE,
     DETAILED_NLV_TEMPLATE,
@@ -13,6 +14,8 @@ from .templates import (
     STEP_FORMAL_TEMPLATE,
     STEP_LEAN_TEMPLATE,
     IN_CONTEXT_LEAN_TEMPLATE,
+    STEPS_SAFE_TEMPLATE,
+    PROVER_TEMPLATE
 )
 
 
@@ -24,6 +27,7 @@ class PromptRegistry:
             "default": NLVTemplate(DEFAULT_NLV_TEMPLATE),
             "detailed": NLVTemplate(DETAILED_NLV_TEMPLATE),
             "structured": NLVTemplate(STRUCTURED_NLV_TEMPLATE),
+            "step": SafeFormalTemplate(STEPS_SAFE_TEMPLATE)
         }
 
         self._formal_templates = {
@@ -33,6 +37,7 @@ class PromptRegistry:
             "step": FormalTemplate(STEP_FORMAL_TEMPLATE),
             "lean": FormalTemplate(STEP_LEAN_TEMPLATE),
             "in-context-lean": FormalTemplate(IN_CONTEXT_LEAN_TEMPLATE),
+            "prover": FormalTemplate(PROVER_TEMPLATE)
         }
 
     def get_nlv_template(self, name: str = "default") -> NLVTemplate:
