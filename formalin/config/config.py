@@ -57,7 +57,7 @@ class Config:
     formal_generation_params: Dict[str, Any] = field(default_factory=lambda: {
         "temperature": 0.2,
         "top_p": 0.9,
-        "max_tokens": 512,
+        "max_tokens": 2048,
     })
 
     # Output settings

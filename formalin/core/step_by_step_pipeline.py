@@ -4,11 +4,12 @@ import logging
 from typing import List, Iterator, Dict, Any, Optional
 
 from ..models.base import BaseLLMProvider
-from ..prompts.registry import PromptRegistry
+from ..prompts.registry import PromptRegistry, SafeFormalTemplate
 from ..datasets.base import BaseDatasetLoader, DatasetItem
 from .result import VerificationResult
 from dataclasses import dataclass
 import re
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ class FormalStepVerificationPipeline:
             formal_language: Target formal language (lean, coq, isabelle, etc.)
             nlv_template: Template name for NLV step
             formal_template: Template name for formal step
+            separate_gpus: Load the models on two different GPUs
         """
         self.nlv_provider = nlv_provider
         self.formal_provider = formal_provider
@@ -128,12 +130,17 @@ class FormalStepVerificationPipeline:
             try:
                 # Step 1: Generate natural language verification
                 logger.debug(f"Generating NLV for problem: {item.problem[:100]}...")
-                nlv_prompt = self.nlv_template.format(
+                if isinstance(self.nlv_template, SafeFormalTemplate):
+                    nlv_prompt = self.nlv_template.format(
                     problem=item.problem,
                     previous_steps=previous_steps,
                     current_step=step
-                )
+                    )
+                else:
+                    nlv_prompt = self.nlv_template.format(problem=item.problem, solution=step)
                 nlv_explanation = self.nlv_provider.generate(nlv_prompt, **nlv_params)
+                if re.findall("<think>", nlv_explanation):
+                    nlv_explanation = nlv_explanation.split("</think>")[1]
 
                 # Prompts like the default one might include the option to output False if the current
                 # step can not be converted in a formal statement

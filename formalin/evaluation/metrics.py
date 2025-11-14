@@ -5,7 +5,9 @@ Evaluation metrics for model answers.
 from typing import List, Union, Dict
 from collections import Counter
 import json
+import numpy as np
 import os
+import re
 
 import subprocess
 import sys
@@ -136,6 +138,15 @@ def weighted_vote_accuracy(
 
     return simple_accuracy(weighted_predictions, ground_truths)
 
+def processbench_f1(y_true, y_pred) -> float:
+    error_data = [int(y==y_pred[idx]) for idx, y in enumerate(y_true) if y != -1]
+    correct_data = [int(y==y_pred[idx]) for idx, y in enumerate(y_true) if y == -1]
+
+    acc1 = np.mean([e for e in error_data]) * 100
+    acc2 = np.mean([e for e in correct_data]) * 100
+    f1 = 2 * acc1 * acc2 / (acc1 + acc2)
+
+    return f1, acc_incorrect, acc_correct
 
 def parse_lean_file(file_path):
     """
@@ -186,7 +197,7 @@ def parse_lean_file(file_path):
         return False
 
 
-def postprocess_lean(lean_code: str) -> str:
+def postprocess_lean(lean_code: str, retrieve_first: bool = True) -> str:
     """
     Postprocess Lean code to avoid common errors
 
@@ -197,6 +208,12 @@ def postprocess_lean(lean_code: str) -> str:
         the postprocessed lean code
     """
     # 1. Remove all occurrences of triple backticks
+    if retrieve_first:
+        try:
+            lean_code = re.findall("```lean[.]+```", lean_code)[-1]
+        except IndexError:
+            print("INCOMPLETE!")
+            
     processed = lean_code.replace("```", "")
 
     # 2. Remove "lean" at the very beginning (strip leading spaces first)
