@@ -6,6 +6,7 @@ from typing import Dict, Type, Optional
 from .base import BaseLLMProvider
 from .ollama_provider import OllamaProvider
 from .huggingface_provider import HuggingFaceProvider
+from .vllm_provider import VLLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class ModelFactory:
         "ollama": OllamaProvider,
         "huggingface": HuggingFaceProvider,
         "hf": HuggingFaceProvider,  # alias
+        "vllm": VLLMProvider,
     }
 
     @classmethod
