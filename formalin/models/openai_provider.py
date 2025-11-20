@@ -137,7 +137,7 @@ class OpenAIProvider(BaseLLMProvider):
                 messages=messages,
                 temperature=gen_params.get("temperature", 0.2),
                 top_p=gen_params.get("top_p", 0.9),
-                max_tokens=gen_params.get("max_tokens", None),
+                # max_tokens=gen_params.get("max_tokens", None),
                 **{k: v for k, v in gen_params.items() if k not in ["temperature", "top_p", "max_tokens"]}
             )
 
