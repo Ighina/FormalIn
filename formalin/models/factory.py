@@ -7,6 +7,7 @@ from .base import BaseLLMProvider
 from .ollama_provider import OllamaProvider
 from .huggingface_provider import HuggingFaceProvider
 from .vllm_provider import VLLMProvider
+from .openai_provider import OpenAIProvider
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class ModelFactory:
         "huggingface": HuggingFaceProvider,
         "hf": HuggingFaceProvider,  # alias
         "vllm": VLLMProvider,
+        "openai": OpenAIProvider,
     }
 
     @classmethod
