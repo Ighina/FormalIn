@@ -56,8 +56,7 @@ class Config:
     nlv_generation_params: Dict[str, Any] = field(default_factory=dict)
     formal_generation_params: Dict[str, Any] = field(default_factory=lambda: {
         "temperature": 0.2,
-        "top_p": 0.9,
-        "max_tokens": 2048,
+        "top_p": 0.9
     })
 
     # Output settings

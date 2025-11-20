@@ -11,6 +11,7 @@ from .templates import (
     DETAILED_NLV_TEMPLATE,
     CONCISE_FORMAL_TEMPLATE,
     VERBOSE_FORMAL_TEMPLATE,
+    STEP_NLV_TEMPLATE,
     STRUCTURED_NLV_TEMPLATE,
     STEP_FORMAL_TEMPLATE,
     STEP_LEAN_TEMPLATE,
@@ -28,7 +29,8 @@ class PromptRegistry:
             "default": NLVTemplate(DEFAULT_NLV_TEMPLATE),
             "detailed": NLVTemplate(DETAILED_NLV_TEMPLATE),
             "structured": NLVTemplate(STRUCTURED_NLV_TEMPLATE),
-            "step": SafeFormalTemplate(STEPS_SAFE_TEMPLATE)
+            "step": SafeFormalTemplate(STEPS_SAFE_TEMPLATE),
+            "step-nlv": NLVTemplate(STEP_NLV_TEMPLATE)
         }
 
         self._formal_templates = {

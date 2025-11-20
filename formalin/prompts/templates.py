@@ -47,7 +47,8 @@ class ProverTemplate(PromptTemplate):
     """Template for formalization in Safe-paper style"""
 
     def format(self, input_text: str, **kwargs) -> str:
-        lean_code = re.findall("```lean\.+```", input_text)
+        lean_code = re.findall("```lean(.+)```", input_text, flags=re.DOTALL)[-1]
+        #lean_code=input_text.strip()
         return self.template.format(input_text=lean_code)
 
 # Default templates
@@ -89,6 +90,61 @@ Please provide the complete {language} code with:
 3. The main theorem statement
 4. Complete proof"""
 
+# Formalin step-wise template
+OLD_STEP_NLV_TEMPLATE = """Analyze the mathematical problem and a single step from the proposed solution below, then provide a verification plan for the given step.
+
+# Problem
+{problem}
+
+# Solution Step
+{solution}
+
+Please provide your verification analysis in the following format:
+
+**What to verify:** [Specific claim or property to check]
+**How to verify:** [Detailed explanation of verification approach]
+**Required concepts:** [Mathematical concepts, theorems, or definitions needed]
+
+BE FAITHFUL TO THE INPUT SOLUTION, EVEN IF YOU THINK IT IS INCORRECT!!!
+YOUR TASK IS TO DEVISE A PLAN TO VERIFY THE SOLUTION STEP, NOT TO CORRECT IT!!!
+ONLY GENERATE THE PLAN FOR THE GIVEN SOLUTION STEP, DO NOT ATTEMPT TO GENERATE PLANS FOR ANY OTHER FUTURE OR PAST STEP!!!
+IF THERE IS NOTHING TO VERIFY (E.G. "THE RESULT IS 36") THEN OUTPUT A VERIFICATION PLAN STATING TO JUST RETURN TRUE IN THE FORMALIZATION PROCESS!
+
+The output should:
+- Clearly specify what needs to be proven
+- Include all necessary mathematical details
+- Be suitable for individual formalization in a proof assistant
+- Be faithful to the input
+
+Verification Plan:"""
+
+STEP_NLV_TEMPLATE = """You are a Step-by-Step Logical Validator. Your goal is to convert a single step of natural language reasoning into a formal verification plan.
+
+### STRICT CONSTRAINTS
+1. SCOPE: You must ONLY analyze the text provided under "TARGET STEP". Ignore the final goal of the main problem except for context.
+2. NO LOOKAHEAD: Do not generate plans for future steps. Do not solve the full problem. If the step says "X is 5", do not calculate what Y is.
+3. FAITHFULNESS: Verify exactly what is written. If the step makes a claim, your plan must verify that specific claim, even if it seems trivial.
+4. TRIVIALITY: If the step is a simple declaration (e.g., "Let x = 5"), the plan should be to "Define variable x and assign value 5".
+
+### INPUT DATA
+
+[CONTEXT / FULL PROBLEM DESCRIPTION]
+{problem}
+
+[TARGET STEP TO VERIFY]
+{solution}
+
+### OUTPUT FORMAT
+Provide the verification plan for the TARGET STEP only.
+
+**Verification Goal:** [Concise statement of the logical transition in this step]
+**Formalization Strategy:** [How to translate this text into a proof state]
+**What to verify:** [Specific claim or equality to check]
+**How to verify:** [Detailed explanation: e.g., "Check if variable P_fri is defined as 18"]
+**Required concepts:** [List concepts]
+
+### YOUR RESPONSE"""
+
 # Step-by-step templates
 STRUCTURED_NLV_TEMPLATE = """Analyze the mathematical problem and its solution below, then provide a structured verification plan broken down into clear, independent steps.
 
@@ -116,6 +172,9 @@ Please provide your verification analysis in the following format:
 **What to verify:** [Final claim that all steps combine to prove]
 **How to verify:** [How the individual steps combine to complete the verification]
 **Required concepts:** [Any final logical principles needed]
+
+BE FAITHFUL TO THE INPUT SOLUTION, EVEN IF YOU THINK IT IS INCORRECT!!!
+YOUR TASK IS TO DEVISE A PLAN TO VERIFY THE SOLUTION, NOT TO CORRECT IT!!!
 
 Each step should be:
 - Independent and self-contained
@@ -422,7 +481,7 @@ import Mathlib.Tactic.Ring     -- DON'T USE
 The proof must **actually verify** the claim through computation or logical derivation, not assume it as a hypothesis.
 INPUT: {input_text}"""
 
-STEPS_SAFE_TEMPLATE = """Given a question and the steps to answer it, you need to determine whether the final step of the answer may involve a hallucination that requires theorem proving in Lean 4.
+OLD_STEPS_SAFE_TEMPLATE = """Given a question and the steps to answer it, you need to determine whether the final step of the answer may involve a hallucination that requires theorem proving in Lean 4.
 * If the step is simple and intuitive, and you are confident that it does not need verification, please answer False.
 * However, you need to verify ** ALL NUMERICAL ** operations, no matter how simple or intuitive they may seem.
 * If the step has a certain leap that is not very intuitive and may involve a hallucination, please provide a Lean theorem that can verify the step.
@@ -528,11 +587,108 @@ theorem test:
 <current_step>
 ### Lean:"""
 
+STEPS_SAFE_TEMPLATE = """Given a question and the steps to answer it, you need to provide a Lean theorem that can verify the step.
+* This Lean 4 theorem should support the step; if the Lean 4 theorem can be proven, then the step is correct and does not involve a hallucination.
+* Ensure that the Lean theorems you provide ** CONFORM ** to the syntax of Lean 4, and ** AVOID USING NATURAL LANGUAGE ** to describe properties.
+* Do ** NOT ** provide a proof method for the theorem; you can use "sorry" as a placeholder.
+* Output the formalized theorem of the final step, and do ** NOT ** output any other content or predict next step.
+* Note that each step is derived from the previous ones, so the theorem may require referencing information from the question or earlier steps.
+
+Note that Lean 4 is not backward compatible with Lean 3.
+* Type constants are now in UpperCamelCase, for example, `Nat` and `List`. Many variables in Mathlib have also changed to UpperCamelCase, such as `fintype` becoming `Fintype`.
+* Lambda expressions now use `=>` as the separator. For example, `fun x => x` is the identity function, instead of `λ x, x`.
+
+### Question:
+Let \[f(x) = \left\{
+\begin{array}{cl} ax+3, &\text{ if }x>2, \\
+x-5 &\text{ if } -2 \le x \le 2, \\
+2x-b &\text{ if } x <-2.
+\end{array}
+\right.\]Find $a+b$ if the piecewise function is continuous (which means that its graph can be drawn without lifting your pencil from the paper).
+
+### Step to be verified:
+For example, $ax+3$ and $x-5$ must be equal when $x=2$.
+This implies $a(2)+3=2-5$, which we solve to get $2a=-6 \Rightarrow a=-3$.
+### Lean:
+```lean
+theorem test
+  (a x: ℝ)
+  (h₀: a * x + 3 = x - 5)
+  (h₁: x = 3):
+  (a = (-3)) := by sorry
+```
+
+### Step to be verified:
+Similarly, $x-5$ and $2x-b$ must be equal when $x=-2$. 
+Substituting, we get $-2-5=2(-2)-b$, which implies $b=3$.
+### Lean:
+```lean
+theorem test
+  (b x: ℝ)
+  (h₀: x - 5 = 2 * x - b)
+  (h₁: x = -2):
+  (b = 3) := by sorry
+```
+
+### Step to be verified:
+So $a+b=-3+3=\boxed{0}$.
+### Lean:
+```lean
+theorem test
+  (a b: ℝ)
+  (h₀: a = (-3))
+  (h₁: b = 3):
+  (a + b = 0) := by sorry
+```
+
+### Question:
+Find the remainder when the sum \[75+76+77+78+79+80+81+82\]is divided by 16.
+
+### Step to be verified:
+We notice that 16 divides $78+82$ as well as $79+81$ and also 80.
+### Lean:
+```lean
+theorem test:
+  (16 ∣ 78 + 82) ∧ (16 ∣ 79 + 81) := by sorry
+```
+
+### Step to be verified:
+Therefore the sum is congruent to  \[75+76+77\pmod{16}.\]
+### Lean:
+```lean
+theorem test:
+  (75 + 76 + 77 + 78 + 79 + 80 + 81 + 82) ≡ (75 + 76 + 77) [MOD 16] := by sorry
+```
+
+### Step to be verified:
+Since these numbers are congruent to $-5$, $-4$, and $-3$ modulo 16, this can be computed as  \[-5-4-3\equiv-12\pmod{16}.\]
+### Lean:
+```lean
+theorem test:
+  (75 ≡ -5 [ZMOD 16]) ∧ (76 ≡ -4 [ZMOD 16]) ∧ (77 ≡ -3 [ZMOD 16]) ∧ (-5-4-3 = -12) := by sorry
+```
+
+### Step to be verified:
+Finally, since $-12\equiv4\pmod{16}$ the remainder we seek is $\boxed{4}$.
+### Lean:
+```lean
+theorem test:
+  (-12 ≡ 4 [ZMOD 16]) ∧ (4 < 16) := by sorry
+```
+
+### Question
+<problem>
+
+### Steps that do not require verification:
+<previous_steps>
+### Step to be verified:
+<current_step>
+### Lean:"""
+
 PROVER_TEMPLATE = """Complete the following Lean 4 code:
 
 ```lean4
 {input_text}
 ```
 
-Before producing the Lean 4 code to formally prove the given theorem, provide a detailed proof plan outlining the main proof steps and strategies.
-The plan should highlight key ideas, intermediate lemmas, and proof structures that will guide the construction of the final formal proof."""
+```lean4"""

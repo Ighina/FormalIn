@@ -18,6 +18,8 @@ class VerificationResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     # Optional fields for tracking
+    nlv_prompt: Optional[str] = None
+    formal_prompt: Optional[str] = None
     nlv_model: Optional[str] = None
     formal_model: Optional[str] = None
     nlv_template: Optional[str] = None
@@ -29,6 +31,8 @@ class VerificationResult:
         return {
             "problem": self.problem,
             "solution": self.solution,
+            "nlv_prompt": self.nlv_prompt,
+            "formal_prompt": self.formal_prompt,
             "nlv_explanation": self.nlv_explanation,
             "formal_proof": self.formal_proof,
             "timestamp": self.timestamp.isoformat(),

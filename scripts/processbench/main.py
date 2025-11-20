@@ -60,6 +60,7 @@ def run_lean_code_creation(nlv_model="qwen3", nlv_template="structured",
                            formal_language="lean",
                            framework="ollama", 
                            separate_gpus=False,
+                           split="all",
                            output_file="auto"):
     """Demonstrate step-by-step verification pipeline."""
     logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ def run_lean_code_creation(nlv_model="qwen3", nlv_template="structured",
 
         # For NLV, use Ollama (adjust model name as needed)
         if separate_gpus:
-            os.environ["OLLAMA_GPU"] = "0"
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
         nlv_provider = ModelFactory.create_provider(
             framework,
             nlv_model
@@ -78,11 +79,14 @@ def run_lean_code_creation(nlv_model="qwen3", nlv_template="structured",
 
         # For formal code, use HuggingFace model
         if separate_gpus:
-            os.environ["OLLAMA_GPU"] = "1"
-        formal_provider = ModelFactory.create_provider(
-            framework,
-            formal_model  # Replace with a better model for code generation
-        )
+            os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+        if formal_model == nlv_model:
+            formal_provider = nlv_provider
+        else:
+            formal_provider = ModelFactory.create_provider(
+                framework,
+                formal_model  # Replace with a better model for code generation
+            )
 
         # Create stepwise pipeline
         logger.info("Creating stepwise pipeline...")
@@ -96,7 +100,7 @@ def run_lean_code_creation(nlv_model="qwen3", nlv_template="structured",
 
         # Create a simple test dataset
         logger.info("Creating test dataset...")
-        dataset_loader = DatasetFactory.create_loader("processbench")
+        dataset_loader = DatasetFactory.create_loader("processbench", split=split)
 
         # Process using stepwise pipeline
         logger.info("Running in batch mode")
@@ -130,6 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--formal_model", "-formalm", default="yinyaowenhua1314/deepseek-prover-v2-7b", help="the model used for the Lean proving or for the natural language to Lean step (depending on the prompt templates used)")
     parser.add_argument("--nlv_template", "-nlvt", default="structured", help="the prompt template used for the first step of the pipeline.")
     parser.add_argument("--formal_template", "-formalt", default="in-context-lean", help="the prompt template used for the second step of the pipeline")
+    parser.add_argument("--split", "-s", default="all", choices=["all", "gsm8k", "math", "olympiadbench", "omnimat"], help="the split of processbench to use. If all, use all of them.")
     parser.add_argument("--output_file", "-o", default="auto", help="name of the output file. If auto generates it by concatenating parameters used.")
     parser.add_argument("--formal_language", "-language", choices=["lean"], default="lean", help="Which formal language to use. For now, only Lean is supported.")
     parser.add_argument("--separate_gpus", action="store_true", help="Whether to load the NLV and Formal method on separate GPUs (suggested for efficiency if GPUs are big enough)")

@@ -42,7 +42,7 @@ class VLLMProvider(BaseLLMProvider):
                 "tensor_parallel_size": self.kwargs.get("tensor_parallel_size", 1),
                 "dtype": self.kwargs.get("dtype", "auto"),
                 "trust_remote_code": self.kwargs.get("trust_remote_code", True),
-                "gpu_memory_utilization": self.kwargs.get("gpu_memory_utilization", 0.9),
+                "gpu_memory_utilization": self.kwargs.get("gpu_memory_utilization", 0.8),
             }
 
             # Add any additional kwargs that don't conflict
@@ -71,7 +71,8 @@ class VLLMProvider(BaseLLMProvider):
             sampling_params = SamplingParams(
                 temperature=gen_params.get("temperature", 0.2),
                 top_p=gen_params.get("top_p", 0.9),
-                max_tokens=gen_params.get("max_tokens", 2048),
+                # max_tokens=None
+                max_tokens=gen_params.get("max_tokens", None),
             )
 
             # Generate

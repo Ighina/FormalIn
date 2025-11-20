@@ -141,6 +141,8 @@ class FormalStepVerificationPipeline:
                 nlv_explanation = self.nlv_provider.generate(nlv_prompt, **nlv_params)
                 if re.findall("<think>", nlv_explanation):
                     nlv_explanation = nlv_explanation.split("</think>")[1]
+                #if self.formal_template_name == "prover":
+                #   nlv_explanation = re.findall("```lean(.+)```", nlv_explanation, flags=re.DOTALL)[-1]
 
                 # Prompts like the default one might include the option to output False if the current
                 # step can not be converted in a formal statement
@@ -159,6 +161,8 @@ class FormalStepVerificationPipeline:
                 result = VerificationResult(
                     problem=item.problem,
                     solution=step,
+                    nlv_prompt=nlv_prompt,
+                    formal_prompt=formal_prompt,
                     nlv_explanation=nlv_explanation,
                     formal_proof=formal_proof,
                     metadata=item.metadata.copy(),

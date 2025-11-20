@@ -140,11 +140,11 @@ def weighted_vote_accuracy(
 
 def processbench_f1(y_true, y_pred) -> float:
     error_data = [int(y==y_pred[idx]) for idx, y in enumerate(y_true) if y != -1]
-    correct_data = [int(y==y_pred[idx]) for idx, y in enumerate(y_true) if y == -1]
+    correct_data = [int(y==y_pred[idx]) for idx, y in enumerate(y_true) if y == 1]
 
-    acc1 = np.mean([e for e in error_data]) * 100
-    acc2 = np.mean([e for e in correct_data]) * 100
-    f1 = 2 * acc1 * acc2 / (acc1 + acc2)
+    acc_incorrect = np.mean([e for e in error_data]) * 100
+    acc_correct = np.mean([e for e in correct_data]) * 100
+    f1 = 2 * acc_incorrect * acc_correct / (acc_incorrect + acc_correct)
 
     return f1, acc_incorrect, acc_correct
 
@@ -210,15 +210,18 @@ def postprocess_lean(lean_code: str, retrieve_first: bool = True) -> str:
     # 1. Remove all occurrences of triple backticks
     if retrieve_first:
         try:
-            lean_code = re.findall("```lean[.]+```", lean_code)[-1]
+            lean_code = re.findall("```lean(.+?)```", lean_code, flags=re.DOTALL)[-1]
         except IndexError:
+            print(lean_code)
             print("INCOMPLETE!")
             
     processed = lean_code.replace("```", "")
 
     # 2. Remove "lean" at the very beginning (strip leading spaces first)
     processed = processed.lstrip()
-    if processed.startswith("lean"):
+    if processed.startswith("lean4"):
+        processed = processed[len("lean4") :].lstrip()
+    elif processed.startswith("lean"):
         processed = processed[len("lean") :].lstrip()
 
     # 3. Remove lines starting with "import "
