@@ -11,6 +11,13 @@ from dataclasses import dataclass
 import re
 import os
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    logging.warning("wandb not installed. Logging features will be disabled.")
+
 logger = logging.getLogger(__name__)
 
 # @dataclass
@@ -80,6 +87,10 @@ class FormalStepVerificationPipeline:
         formal_language: str = "lean",
         nlv_template: str = "step",
         formal_template: str = "prover",
+        use_wandb: bool = False,
+        wandb_project: Optional[str] = None,
+        wandb_run_name: Optional[str] = None,
+        wandb_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the pipeline.
@@ -91,7 +102,10 @@ class FormalStepVerificationPipeline:
             formal_language: Target formal language (lean, coq, isabelle, etc.)
             nlv_template: Template name for NLV step
             formal_template: Template name for formal step
-            separate_gpus: Load the models on two different GPUs
+            use_wandb: Whether to enable wandb logging
+            wandb_project: Wandb project name
+            wandb_run_name: Wandb run name
+            wandb_config: Additional wandb configuration
         """
         self.nlv_provider = nlv_provider
         self.formal_provider = formal_provider
@@ -100,9 +114,78 @@ class FormalStepVerificationPipeline:
         self.nlv_template_name = nlv_template
         self.formal_template_name = formal_template
 
+        # Wandb configuration
+        self.use_wandb = use_wandb and WANDB_AVAILABLE
+        self.wandb_project = wandb_project
+        self.wandb_run_name = wandb_run_name
+        self.wandb_config = wandb_config or {}
+
+        if use_wandb and not WANDB_AVAILABLE:
+            logger.warning("wandb logging requested but wandb is not installed. Logging disabled.")
+
         # Get templates
         self.nlv_template = self.prompt_registry.get_nlv_template(nlv_template)
         self.formal_template = self.prompt_registry.get_formal_template(formal_template)
+
+    def _init_wandb(self, dataset_info: Optional[Dict[str, Any]] = None):
+        """Initialize wandb run with experiment configuration."""
+        if not self.use_wandb:
+            return
+
+        # Build configuration dictionary
+        config = {
+            "nlv_model": self.nlv_provider.model_name,
+            "formal_model": self.formal_provider.model_name,
+            "formal_language": self.formal_language,
+            "nlv_template": self.nlv_template_name,
+            "formal_template": self.formal_template_name,
+        }
+
+        # Add dataset info if available
+        if dataset_info:
+            config.update({"dataset": dataset_info})
+
+        # Add user-provided config
+        config.update(self.wandb_config)
+
+        # Initialize wandb
+        wandb.init(
+            project=self.wandb_project or "formal-verification",
+            name=self.wandb_run_name,
+            config=config,
+        )
+        logger.info(f"Initialized wandb run: {wandb.run.name}")
+
+    def _log_step_results(
+        self,
+        step_results: StepVerificationResult,
+        item_idx: int,
+    ):
+        """Log all step verification results for a single item to wandb."""
+        if not self.use_wandb:
+            return
+
+        for step_idx, result in enumerate(step_results.steps):
+            # Convert result to dict
+            result_dict = result.to_dict()
+
+            # Create log entry with step and item indices
+            log_data = {
+                "item_idx": item_idx,
+                "step_idx": step_idx,
+                f"item_{item_idx}/step_{step_idx}/nlv_explanation_length": len(result.nlv_explanation),
+                f"item_{item_idx}/step_{step_idx}/formal_proof_length": len(result.formal_proof),
+                f"item_{item_idx}/step_{step_idx}/has_formal_proof": bool(result.formal_proof.strip()),
+            }
+
+            # Add metadata if present
+            if result.metadata:
+                for key, value in result.metadata.items():
+                    if isinstance(value, (int, float, bool, str)):
+                        log_data[f"item_{item_idx}/step_{step_idx}/metadata/{key}"] = value
+
+            # Log to wandb
+            wandb.log(log_data)
 
     def process_item(
         self,
@@ -213,7 +296,11 @@ class FormalStepVerificationPipeline:
             List of VerificationResult objects
         """
         logger.info("Starting dataset processing")
-        logger.info(f"Dataset info: {dataset_loader.get_info()}")
+        dataset_info = dataset_loader.get_info()
+        logger.info(f"Dataset info: {dataset_info}")
+
+        # Initialize wandb if enabled
+        self._init_wandb(dataset_info)
 
         results = []
         for idx, item in enumerate(dataset_loader.load()):
@@ -222,6 +309,9 @@ class FormalStepVerificationPipeline:
             try:
                 result = self.process_item(item, nlv_params, formal_params)
                 results.append(result)
+
+                # Log to wandb if enabled
+                self._log_step_results(result, idx)
 
                 # Log progress for larger datasets
                 if (idx + 1) % 10 == 0:
@@ -235,6 +325,12 @@ class FormalStepVerificationPipeline:
                 continue
 
         logger.info(f"Completed processing {len(results)} items")
+
+        # Finish wandb run if enabled
+        if self.use_wandb:
+            wandb.finish()
+            logger.info("Wandb run finished")
+
         return results
 
     def process_dataset_streaming(
@@ -255,21 +351,35 @@ class FormalStepVerificationPipeline:
             VerificationResult objects
         """
         logger.info("Starting streaming dataset processing")
-        logger.info(f"Dataset info: {dataset_loader.get_info()}")
+        dataset_info = dataset_loader.get_info()
+        logger.info(f"Dataset info: {dataset_info}")
 
-        for idx, item in enumerate(dataset_loader.load()):
-            logger.debug(f"Processing item {idx + 1}")
+        # Initialize wandb if enabled
+        self._init_wandb(dataset_info)
 
-            try:
-                result = self.process_item(item, nlv_params, formal_params)
-                yield result
+        try:
+            for idx, item in enumerate(dataset_loader.load()):
+                logger.debug(f"Processing item {idx + 1}")
 
-            except KeyboardInterrupt:
-                logger.info("Processing interrupted by user")
-                break
-            except Exception as e:
-                logger.error(f"Unexpected error processing item {idx + 1}: {e}")
-                continue
+                try:
+                    result = self.process_item(item, nlv_params, formal_params)
+
+                    # Log to wandb if enabled
+                    self._log_step_results(result, idx)
+
+                    yield result
+
+                except KeyboardInterrupt:
+                    logger.info("Processing interrupted by user")
+                    break
+                except Exception as e:
+                    logger.error(f"Unexpected error processing item {idx + 1}: {e}")
+                    continue
+        finally:
+            # Finish wandb run if enabled
+            if self.use_wandb:
+                wandb.finish()
+                logger.info("Wandb run finished")
 
     def update_config(
         self,
