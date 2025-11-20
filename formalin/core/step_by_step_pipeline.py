@@ -176,10 +176,10 @@ class FormalStepVerificationPipeline:
                 f"item_{item_idx}/step_{step_idx}/nlv_explanation_length": len(result.nlv_explanation),
                 f"item_{item_idx}/step_{step_idx}/formal_proof_length": len(result.formal_proof),
                 f"item_{item_idx}/step_{step_idx}/has_formal_proof": bool(result.formal_proof.strip()),
-                f"item_{item_idx}/step_{step_idx}/nlv_explanation_length": result.nlv_prompt,
-                f"item_{item_idx}/step_{step_idx}/formal_proof_length": result.formal_prompt,
-                f"item_{item_idx}/step_{step_idx}/nlv_explanation_length": result.nlv_explanation,
-                f"item_{item_idx}/step_{step_idx}/formal_proof_length": result.formal_proof
+                f"item_{item_idx}/step_{step_idx}/nlv_explanation_prompt": result.nlv_prompt,
+                f"item_{item_idx}/step_{step_idx}/formal_proof_prompt": result.formal_prompt,
+                f"item_{item_idx}/step_{step_idx}/nlv_explanation": result.nlv_explanation,
+                f"item_{item_idx}/step_{step_idx}/formal_proof": result.formal_proof
             }
 
             # Add metadata if present
