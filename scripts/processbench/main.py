@@ -61,21 +61,30 @@ def run_lean_code_creation(nlv_model="qwen3", nlv_template="structured",
                            framework="ollama", 
                            separate_gpus=False,
                            split="all",
-                           output_file="auto"):
+                           output_file="auto",
+                           openai_token=None,
+                           wandb_token=None):
     """Demonstrate step-by-step verification pipeline."""
     logger = logging.getLogger(__name__)
 
     try:
         # Create model providers
         logger.info("Creating model providers...")
+        if openai_token:
+            print("BIMBIIIIIIIIIIIIIII!!!!!!!!!!!!!!")
+            os.environ["OPENAI_API_KEY"] = openai_token
 
         # For NLV, use Ollama (adjust model name as needed)
         if separate_gpus:
             os.environ["CUDA_VISIBLE_DEVICES"] = "0"
         nlv_provider = ModelFactory.create_provider(
             framework,
-            nlv_model
+            nlv_model,
+            api_key=openai_token
         )
+        if not nlv_provider.api_key:
+            print(openai_token)
+            0/0
 
         # For formal code, use HuggingFace model
         if separate_gpus:
@@ -85,17 +94,24 @@ def run_lean_code_creation(nlv_model="qwen3", nlv_template="structured",
         else:
             formal_provider = ModelFactory.create_provider(
                 framework,
-                formal_model  # Replace with a better model for code generation
-            )
+                formal_model,  # Replace with a better model for code generation
+                api_key=openai_token
+                )
 
         # Create stepwise pipeline
         logger.info("Creating stepwise pipeline...")
+        use_wandb=False
+        if wandb_token:
+            os.environ["WANDB_API_KEY"] = wandb_token
+            use_wandb=True
+
         pipeline = FormalStepVerificationPipeline(
             nlv_provider=nlv_provider,
             formal_provider=formal_provider,
             formal_language=formal_language,
             nlv_template=nlv_template,
             formal_template=formal_template,
+            use_wandb=use_wandb,
             )
 
         # Create a simple test dataset
@@ -138,7 +154,8 @@ if __name__ == "__main__":
     parser.add_argument("--output_file", "-o", default="auto", help="name of the output file. If auto generates it by concatenating parameters used.")
     parser.add_argument("--formal_language", "-language", choices=["lean"], default="lean", help="Which formal language to use. For now, only Lean is supported.")
     parser.add_argument("--separate_gpus", action="store_true", help="Whether to load the NLV and Formal method on separate GPUs (suggested for efficiency if GPUs are big enough)")
-
+    parser.add_argument("--openai_token", "-openai", required=False, help="The openai token required if using openai as framework.")
+    parser.add_argument("--wandb_token", "-wandb", required=False, help="The wandb token required if using wandb for logging. Including this parameter enables wandb by default.")
     args = parser.parse_args()
 
     setup_logging()

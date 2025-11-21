@@ -1,4 +1,5 @@
-from formalin.evaluation.metrics import parse_lean_file, postprocess_lean, processbench_f1
+from formalin.evaluation.metrics import parse_lean_file, postprocess_lean, processbench_f1, LeanCodeExtractor
+from formalin.models import ModelFactory
 import json
 import os
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
@@ -55,6 +56,7 @@ def compute_metrics(evaluation_results: dict, prev_split: str, verbose: bool = F
 
 def main(lean_project: str, 
          result_file: str,
+         extractor_model: str = None,
          clean: bool = True,
          verbose: bool = False) -> dict:
     
@@ -75,6 +77,14 @@ def main(lean_project: str,
     step_idx = 0
 
     evaluation_results = {}
+
+    extractor_class = None
+    if extractor_model is not None:
+        extractor_model = ModelFactory.create_provider(
+            "vllm", # just vllm supported for this at the moment!
+            extractor_model
+        )
+        extractor_class = LeanCodeExtractor(extractor_model)
 
     for problem in results:
         for result in problem["steps"]:
@@ -124,7 +134,7 @@ def main(lean_project: str,
                 file_name = f"step_formalizations/{problem_id}/step_{step_idx}.lean"
 
                 with open(file_name, "w") as f:
-                    f.write(postprocess_lean(result["formal_proof"]))
+                    f.write(postprocess_lean(result["formal_proof"], extractor_class = extractor_class))
 
                 parsed = parse_lean_file(file_path=file_name)
 
@@ -163,6 +173,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--lean_project", type=str, required=True, help="Path to the Lean project.")
     parser.add_argument("--result_file", type=str, required=True, help="Path to the JSON result file.")
+    parser.add_argument("--extractor_model", type=str, required=False, help="If included, use the given LLM to extract Lean code.")
     parser.add_argument("--clean", action="store_true", help="Whether to clean up temporary files.")
     parser.add_argument("--verbose", action="store_true", help="Whether to print detailed evaluation info.")
     parser.add_argument("--save_metrics", type=str, default=None, help="Path to save the computed metrics as a JSON file.")
@@ -172,6 +183,7 @@ if __name__ == "__main__":
     metrics = main(
         lean_project=args.lean_project,
         result_file=args.result_file,
+        extractor_model=args.extractor_model,
         clean=args.clean,
         verbose=args.verbose
     )
