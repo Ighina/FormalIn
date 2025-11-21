@@ -289,7 +289,7 @@ def postprocess_lean(lean_code: str, retrieve_first: bool = True, extractor_clas
         the postprocessed lean code
     """
     if extractor_class is not None:
-        lean_code = extractor_class.extract(lean_code)
+        processed = extractor_class.extract(lean_code)
     else:
         # 1. Remove all occurrences of triple backticks
         if retrieve_first:
