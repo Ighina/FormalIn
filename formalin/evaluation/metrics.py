@@ -2,6 +2,7 @@
 Evaluation metrics for model answers.
 """
 
+from ..models import ModelFactory
 from typing import List, Union, Dict
 from collections import Counter
 import json
@@ -196,8 +197,88 @@ def parse_lean_file(file_path):
         print(f"Error parsing {file_path}: {e}")
         return False
 
+class LeanCodeExtractor:
+    def __init__(self, llm_client):
+        """
+        :param llm_client: An object with a .generate(prompt) method.
+        """
+        self.llm = llm_client
 
-def postprocess_lean(lean_code: str, retrieve_first: bool = True) -> str:
+    def extract(self, raw_output: str) -> str:
+        """
+        Main entry point. Attempts regex extraction first. 
+        If that fails or produces non-code results, falls back to the LLM.
+        """
+        # 1. Attempt Heuristic Extraction
+        extracted_code = self._heuristic_extract(raw_output)
+
+        # 2. Validate: Does it actually look like Lean code?
+        # If it's empty or lacks basic keywords, assume extraction failed.
+        if not extracted_code or not self._is_likely_lean(extracted_code):
+            print(">> Heuristic extraction failed or ambiguous. Triggering LLM Fallback...")
+            return self._llm_fallback_extract(raw_output)
+        
+        return extracted_code
+
+    def _heuristic_extract(self, text: str) -> str:
+        """
+        Deterministic Regex approach. Fast and free.
+        """
+        # A. Check for the explicit delimiter we asked for in the prompt
+        delimiter = "### START LEAN CODE ###"
+        content_to_scan = text
+        if delimiter in text:
+            content_to_scan = text.split(delimiter, 1)[1].strip()
+
+        # B. Regex for Markdown blocks (handles truncation via $)
+        # Matches ```lean, ```Lean, ```lean4, or just ```
+        code_block_pattern = r"```(?:lean4?|Lean)?\s*(.*?)(?:```|$)"
+        match = re.search(code_block_pattern, content_to_scan, re.DOTALL)
+
+        if match:
+            candidate = match.group(1).strip()
+            if candidate:
+                return candidate
+
+        # C. If delimiter exists but no backticks, assume everything after delimiter is code
+        if delimiter in text:
+            return content_to_scan
+
+        return ""
+
+    def _is_likely_lean(self, code: str) -> bool:
+        """
+        Simple sanity check. Lean code almost always contains specific keywords.
+        If we extracted a sentence like "Sure, here is the code", this returns False.
+        """
+        keywords = ["import", "example", "theorem", "def", "lemma", "variable", "structure", "class", ":="]
+        return any(k in code for k in keywords)
+
+    def _llm_fallback_extract(self, dirty_text: str) -> str:
+        """
+        The 'Smart' Fallback. Asks an LLM to clean the mess.
+        """
+        prompt = f"""
+You are a Code Cleaning Tool.
+Your task is to identify and extract the Lean 4 code from the text below.
+
+RULES:
+1. Output ONLY the code.
+2. Do NOT include markdown backticks (```) in your output.
+3. Do NOT include the string "### START LEAN CODE ###".
+4. If the input text is truncated (cuts off), output exactly what is there so far without trying to finish it.
+
+DIRTY INPUT:
+{dirty_text}
+"""
+        # Call the placeholder LLM
+        clean_code = self.llm.generate(prompt)
+        
+        # Final strip just in case the cleanup LLM added whitespace
+        return clean_code.strip()
+
+
+def postprocess_lean(lean_code: str, retrieve_first: bool = True, extractor_class: LeanCodeExtractor = None) -> str:
     """
     Postprocess Lean code to avoid common errors
 
@@ -207,22 +288,25 @@ def postprocess_lean(lean_code: str, retrieve_first: bool = True) -> str:
     Returns:
         the postprocessed lean code
     """
-    # 1. Remove all occurrences of triple backticks
-    if retrieve_first:
-        try:
-            lean_code = re.findall("```lean(.+?)```", lean_code, flags=re.DOTALL)[-1]
-        except IndexError:
-            print(lean_code)
-            print("INCOMPLETE!")
-            
-    processed = lean_code.replace("```", "")
+    if extractor_class is not None:
+        lean_code = extractor_class.extract(lean_code)
+    else:
+        # 1. Remove all occurrences of triple backticks
+        if retrieve_first:
+            try:
+                lean_code = re.findall("```lean(.+?)```", lean_code, flags=re.DOTALL)[-1]
+            except IndexError:
+                print(lean_code)
+                print("INCOMPLETE!")
+                
+        processed = lean_code.replace("```", "")
 
-    # 2. Remove "lean" at the very beginning (strip leading spaces first)
-    processed = processed.lstrip()
-    if processed.startswith("lean4"):
-        processed = processed[len("lean4") :].lstrip()
-    elif processed.startswith("lean"):
-        processed = processed[len("lean") :].lstrip()
+        # 2. Remove "lean" at the very beginning (strip leading spaces first)
+        processed = processed.lstrip()
+        if processed.startswith("lean4"):
+            processed = processed[len("lean4") :].lstrip()
+        elif processed.startswith("lean"):
+            processed = processed[len("lean") :].lstrip()
 
     # 3. Remove lines starting with "import "
     lines = processed.splitlines()
@@ -241,7 +325,7 @@ def postprocess_lean(lean_code: str, retrieve_first: bool = True) -> str:
 
 
 def lean_compile_success(
-    result_file: str, lean_project: str, clean: bool = True
+    result_file: str, lean_project: str, clean: bool = True, use_extractor: bool = True, extractor_model: str = "Qwen/Qwen3-4B-Instruct-2507"
 ) -> Dict[str, float]:
     """
     Calculate the number of successes in parsing generated lean code, both at the step level
@@ -282,6 +366,13 @@ def lean_compile_success(
     total_steps = 0
     correct_steps = 0
 
+    extractor_class = None
+    if use_extractor:
+        extractor_class = ModelFactory.create_provider(
+            "vllm", # just vllm supported for this at the moment!
+            extractor_model
+        )
+
     for result in results:
         total_steps += 1
         unique_id = {result["metadata"]["unique_id"]}
@@ -302,7 +393,7 @@ def lean_compile_success(
             file_name = f"step_formalizations/{unique_id}/step_{idx}.lean"
 
             with open(file_name, "w") as f:
-                f.write(postprocess_lean(step["formal_code"]))
+                f.write(postprocess_lean(step["formal_code"], extractor_class=extractor_class))
 
             parsed = parse_lean_file(file_path=file_name)
 
