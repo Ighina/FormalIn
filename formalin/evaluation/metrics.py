@@ -368,10 +368,11 @@ def lean_compile_success(
 
     extractor_class = None
     if use_extractor:
-        extractor_class = ModelFactory.create_provider(
+        extractor_model = ModelFactory.create_provider(
             "vllm", # just vllm supported for this at the moment!
             extractor_model
         )
+        extractor_class = LeanCodeExtractor(extractor_model)
 
     for result in results:
         total_steps += 1
