@@ -200,7 +200,7 @@ STEP_LEAN_TEMPLATE = """You are a Lean 4 expert. This is a basic tutorial on how
 Based on this, follow the following verification instructions expressed in natural language to create a Lean 4 proof: note that the lean proof can also be incorrect. DO NOT CORRECT ANY CLAIM. DO NOT OUPUT ANYTHING BUT LEAN 4 CODE: {input_text}
 """
 
-IN_CONTEXT_LEAN_TEMPLATE = """You are a translator that converts natural language mathematical verification procedures into executable Lean 4 code. Your goal is to produce code that **actually verifies** whether mathematical claims are true or false by computation or proof.
+OLD_IN_CONTEXT_LEAN_TEMPLATE = """You are a translator that converts natural language mathematical verification procedures into executable Lean 4 code. Your goal is to produce code that **actually verifies** whether mathematical claims are true or false by computation or proof.
 
 ## Core Requirements
 
@@ -480,6 +480,154 @@ import Mathlib.Tactic.Ring     -- DON'T USE
 
 The proof must **actually verify** the claim through computation or logical derivation, not assume it as a hypothesis.
 INPUT: {input_text}"""
+
+IN_CONTEXT_LEAN_TEMPLATE = """You are a translator that converts natural language mathematical verification plans into executable Lean 4 code. Your goal is to produce code that **actually verifies** whether mathematical claims are true or false by computation or proof.
+
+## Core Requirements
+
+1. **ALWAYS verify the claim computationally or by proof** - never assume claims as hypotheses.
+2. **Use `rfl` (reflexivity) or `decide` for computational verification** when possible.
+3. **ALWAYS use `import Mathlib` as the only import** - do not use specific submodule imports.
+4. **Output ONLY the Lean 4 code** - no explanations, predictions, or additional content.
+5. **DO NOT use `sorry`, axioms, or unproven assumptions** - all proofs must be complete.
+6. **DO NOT change equations or values** - translate exactly as given.
+7. **The code must succeed for TRUE claims and FAIL for FALSE claims** - this is how we verify correctness.
+
+## Handling Incomplete Input (Token Limits)
+
+Sometimes the input text provided to you may be truncated (cut off) due to token limits.
+- **DO NOT** attempt to complete the English sentence.
+- **DO NOT** repeat the English text.
+- **DO** attempt to generate the valid Lean 4 code based on the mathematical intent visible so far.
+- If the "What to verify" section is cut off, look at the "Verification Goal" or context to infer the intended check.
+
+## Output Format
+
+You must begin your response with the delimiter:
+`### START LEAN CODE ###`
+Followed immediately by the Lean code.
+
+---
+
+## Examples
+
+### Example 1: True Arithmetic Claim
+
+*INPUT PLAN:*
+
+**Verification Goal:** Verify the power calculation.
+**Formalization Strategy:** Define the exponentiation relation and check equality.
+**What to verify:** 103 raised to the 6th power equals 1224238819633
+**How to verify:** Compute 103^6 and check if it matches the target value.
+**Required concepts:** Exponentiation, Nat.
+
+### START LEAN CODE ###
+```Lean
+
+import Mathlib
+
+def Root6 (x y : Nat) : Prop := y ^ 6 = x
+
+-- This will SUCCEED because 103^6 actually equals 1224238819633
+example : Root6 1224238819633 103 := by
+  unfold Root6
+  norm_num```
+
+### Example 2: False Arithmetic Claim
+*INPUT PLAN:*
+
+**Verification Goal:** Verify the power calculation.
+**Formalization Strategy:** Define the exponentiation.
+**What to verify:** 103 raised to the 6th power equals 1061520150601
+**How to verify:** Compute 103^6 and check for equality.
+
+### START LEAN CODE ###
+```Lean
+
+import Mathlib
+
+def Root6 (x y : Nat) : Prop := y ^ 6 = x
+
+-- This will FAIL because 103^6 does not equal 1061520150601
+example : Root6 1061520150601 103 := by
+  unfold Root6
+  norm_num```
+### Example 3: Simple Equality (Truncated Input)
+*INPUT PLAN:*
+
+**Verification Goal:** Check simple addition.
+**What to verify:** 15 + 27 equals 42
+**How to verify:** Add 15 and 27 and com
+(Note: Input cut off mid-sentence)
+
+### START LEAN CODE ###
+```Lean
+
+import Mathlib
+
+-- Input was truncated, but intent (equality check) is clear
+example : (15 : Nat) + 27 = 42 := rfl```
+### Example 4: Divisibility Property
+*INPUT PLAN:*
+
+**Verification Goal:** Verify divisibility.
+**Formalization Strategy:** Use existential quantifier.
+**What to verify:** 24 is divisible by 6
+**How to verify:** Check if there exists a natural number k such that 6 * k = 24
+
+### START LEAN CODE ###
+```Lean
+
+import Mathlib
+
+-- This will SUCCEED
+example : ∃ k : Nat, 6 * k = 24 := by
+  use 4
+  norm_num```
+### Example 5: Let Binding (Lean 4 Syntax)
+*INPUT PLAN:*
+
+**Verification Goal:** Variable assignment and summation.
+**What to verify:** Given x = 5 and y = 10, verify x + y equals 15
+**How to verify:** Define x and y using let bindings, then sum them.
+
+### START LEAN CODE ###
+```Lean
+
+import Mathlib
+
+-- Note: Lean 4 uses semicolon, NOT "in" keyword
+example : let x := 5; let y := 10; x + y = 15 := by
+  norm_num```
+### Example 6: Multi-step Calculation (Heavily Truncated)
+*INPUT PLAN:*
+
+**Verification Goal:** Verify calculation step.
+**What to verify:** 100 - 20 = 80
+**How to verify:** Perform subtra
+
+### START LEAN CODE ###
+```Lean
+
+import Mathlib
+
+-- Input truncated. Formalizing the visible equality claim.
+example : 100 - 20 = 80 := rfl```
+## Lean 4 Syntax Reminders
+Use let x := v; (semicolon) NOT let x := v in
+
+Use norm_num for arithmetic.
+
+Use decide for inequalities.
+
+Use fun x => for lambdas.
+
+*INPUT PLAN:* 
+
+{input_text}
+
+### START LEAN CODE ###
+"""
 
 OLD_STEPS_SAFE_TEMPLATE = """Given a question and the steps to answer it, you need to determine whether the final step of the answer may involve a hallucination that requires theorem proving in Lean 4.
 * If the step is simple and intuitive, and you are confident that it does not need verification, please answer False.
