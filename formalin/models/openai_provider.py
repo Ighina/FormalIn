@@ -55,7 +55,7 @@ class OpenAIProvider(BaseLLMProvider):
     def is_available(self) -> bool:
         """Check if OpenAI is available."""
         if self.api_base:
-            if self.model_name not in self.client.models.list():
+            if self.model_name not in [model.id for model in self.client.models.list()]:
                 logger.warning(f"Chosen model not Available on current local deployment of VLLM. Serve the model with: vllm serve {self.model_name}")
                 return False
 
@@ -71,6 +71,9 @@ class OpenAIProvider(BaseLLMProvider):
 
     def _load_client(self):
         """Load the OpenAI client."""
+        if not OPENAI_AVAILABLE:
+            return
+
         if self.api_base:
             logger.info(f"Initializing VLLM client with model: {self.model_name}")
             self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
@@ -82,9 +85,6 @@ class OpenAIProvider(BaseLLMProvider):
             except Exception as e:
                 logger.error(f"Error initializing VLLM client: {e}")
                 self.client = None
-            return
-
-        if not OPENAI_AVAILABLE:
             return
 
         if not self.api_key:
