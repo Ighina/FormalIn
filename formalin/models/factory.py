@@ -38,7 +38,14 @@ class ModelFactory:
             raise ValueError(f"Unknown provider type: {provider_type}. Available: {available}")
 
         provider_class = cls._providers[provider_type]
-        provider = provider_class(model_name, **kwargs)
+        try:
+            api_key = kwargs.pop("api_key")
+            if api_key:
+                provider = provider_class(model_name, api_key=api_key, **kwargs)
+            else:
+                provider = provider_class(model_name, **kwargs)
+        except KeyError:
+            provider = provider_class(model_name, **kwargs)
 
         if not provider.is_available():
             logger.warning(f"Provider {provider_type} is not available")

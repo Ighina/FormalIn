@@ -38,16 +38,27 @@ class OpenAIProvider(BaseLLMProvider):
         super().__init__(model_name, **kwargs)
         self.client = None
         self.api_key = kwargs.get("api_key", os.getenv("OPENAI_API_KEY"))
+        self.api_base = None
 
         # Cost tracking
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost = 0.0
 
+        if not self._is_valid_model():
+            logger.warning("Chosen model is not a valid OpenAI model. Assuming we want to use VLLM server...")
+            self.api_key = "EMPTY"
+            self.api_base = "http://localhost:8000/v1"
+
         self._load_client()
 
     def is_available(self) -> bool:
         """Check if OpenAI is available."""
+        if self.api_base:
+            if self.model_name not in self.client.models.list():
+                logger.warning(f"Chosen model not Available on current local deployment of VLLM. Serve the model with: vllm serve {self.model_name}")
+                return False
+
         if not OPENAI_AVAILABLE:
             logger.warning("OpenAI package not available. Install with: pip install openai")
             return False
@@ -60,6 +71,19 @@ class OpenAIProvider(BaseLLMProvider):
 
     def _load_client(self):
         """Load the OpenAI client."""
+        if self.api_base:
+            logger.info(f"Initializing VLLM client with model: {self.model_name}")
+            self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
+
+            # Verify the model is available by checking against known models
+            try:
+                if not self.is_available():
+                    raise ValueError("The given model is not currently available on VLLM server!")
+            except Exception as e:
+                logger.error(f"Error initializing VLLM client: {e}")
+                self.client = None
+            return
+
         if not OPENAI_AVAILABLE:
             return
 
@@ -135,9 +159,9 @@ class OpenAIProvider(BaseLLMProvider):
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
-                # temperature=gen_params.get("temperature", 0.2),
-                # top_p=gen_params.get("top_p", 0.9),
-                # max_tokens=gen_params.get("max_tokens", None),
+                temperature=gen_params.get("temperature", 0.2),
+                top_p=gen_params.get("top_p", 0.9),
+                max_tokens=gen_params.get("max_tokens", None),
                 **{k: v for k, v in gen_params.items() if k not in ["temperature", "top_p", "max_tokens"]}
             )
 
@@ -163,7 +187,7 @@ class OpenAIProvider(BaseLLMProvider):
         return {
             "temperature": 0.2,
             "top_p": 0.9,
-            "max_tokens": None,
+            "max_tokens": 4098,
         }
 
     def get_usage_stats(self) -> Dict[str, Any]:

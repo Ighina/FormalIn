@@ -69,8 +69,9 @@ class VLLMProvider(BaseLLMProvider):
 
             # Create sampling params
             sampling_params = SamplingParams(
-                temperature=gen_params.get("temperature", 0.2),
+                temperature=gen_params.get("temperature", 0.0),
                 top_p=gen_params.get("top_p", 0.9),
+                repetition_penalty=1.05,
                 # max_tokens=None
                 max_tokens=gen_params.get("max_tokens", None),
             )
@@ -90,5 +91,5 @@ class VLLMProvider(BaseLLMProvider):
         return {
             "temperature": 0.2,
             "top_p": 0.9,
-            "max_tokens": 2048,
+            "max_tokens": 4096,
         }
