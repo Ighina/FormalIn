@@ -203,6 +203,59 @@ class LeanCodeExtractor:
         :param llm_client: An object with a .generate(prompt) method.
         """
         self.llm = llm_client
+    
+    def _sanitize_lean_code(self, code: str) -> str:
+        lines = code.split('\n')
+        cleaned_lines = []
+    
+        for line in lines:
+            stripped = line.rstrip()
+        
+            # 0. Skip completely empty lines (optional, but cleaner)
+            if not stripped:
+                cleaned_lines.append("")
+                continue
+
+            # 1. FIX TOP-LEVEL LET -> ABBREV
+            if re.match(r'^let\s+', stripped):
+                stripped = re.sub(r'^let\s+', 'abbrev ', stripped, count=1)
+
+            # 2. FIX DEF -> ABBREV (For numeric constants)
+            # Match "def x : Type :=" or "def x :="
+            # Exclude functions with args like "def f (x : Nat) :="
+            if re.match(r'^def\s+\w+\s*(:\s*[A-Z]\w+)?\s*:=', stripped):
+                stripped = re.sub(r'^def\s+', 'abbrev ', stripped, count=1)
+
+            # 3. MERGE LOGIC (The Fix)
+            should_merge = False
+        
+            if cleaned_lines:
+                prev = cleaned_lines[-1]
+            
+                # GUARD 1: NEVER merge onto a comment line
+                if prev.lstrip().startswith("--"):
+                    should_merge = False
+                
+                # GUARD 2: Check for broken identifiers (the original purpose)
+                elif (len(prev) > 0 and 
+                      prev[-1].isalpha() and 
+                      # Previous line shouldn't end with a terminator or keyword
+                      not prev.endswith((':=', 'by', 'with', 'where', 'in', '=>')) and
+                      stripped and stripped[0].isalpha() and 
+                      # GUARD 3: Current line must NOT be a new keyword/statement
+                      # Added 'abbrev' to this list so it doesn't get merged!
+                      not stripped.startswith(('def ', 'abbrev ', 'example ', 'theorem ', 'import ', 'let ', '#', '--'))):
+                    should_merge = True
+
+            if should_merge:
+                # Fix the split word (e.g. "to" + "tal" -> "total")
+                prev = cleaned_lines.pop()
+                merged = prev + stripped 
+                cleaned_lines.append(merged)
+            else:
+                cleaned_lines.append(stripped)
+        
+        return "\n".join(cleaned_lines)
 
     def extract(self, raw_output: str) -> str:
         """
@@ -218,7 +271,7 @@ class LeanCodeExtractor:
             print(">> Heuristic extraction failed or ambiguous. Triggering LLM Fallback...")
             return self._llm_fallback_extract(raw_output)
         
-        return extracted_code
+        return self._sanitize_lean_code(extracted_code)
 
     def _heuristic_extract(self, text: str) -> str:
         """
