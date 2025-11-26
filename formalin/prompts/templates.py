@@ -507,6 +507,11 @@ You must begin your response with the delimiter:
 `### START LEAN CODE ###`
 Followed immediately by the Lean code.
 
+## Code Style Guide (STRICT)
+1. **NO LINE WRAPPING:** Do not wrap long lines. Write code on a single line even if it is long.
+2. **ATOMIC IDENTIFIERS:** Never insert a newline inside a variable name (e.g., write `totalFirstPhase`, NOT `total\nFirstPhase`).
+3. **ONE STATEMENT PER LINE:** Each definition or theorem must be on its own line.
+
 ---
 
 ## Examples
