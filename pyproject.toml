@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leansteer"
+version = "0.1.0"
+description = "Residual-stream probing and steering of Lean autoformalizers against FaithformBench-AF verdicts"
+requires-python = ">=3.10"
+dependencies = [
+  "torch", "transformers>=4.45", "accelerate", "safetensors", "huggingface_hub",
+  "numpy", "scipy", "pandas", "pyarrow", "scikit-learn", "pyyaml", "tqdm", "matplotlib", "joblib",
+  "sentencepiece",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["leansteer*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: needs model weights"]

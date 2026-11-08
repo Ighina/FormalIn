@@ -1,0 +1,865 @@
+# LeanSteer
+
+Residual-stream probing and steering of the four FaithformBench-AF
+autoformalizers, predicting the benchmark's prover verdict for each model
+from the model's own internal state.
+
+## What it does
+
+`background.md` is the long-form explanation of the data, the method, every experiment and its conclusions, with pointers into the code; this README is the operational summary and the result tables.
+
+[FaithformBench](../RLLF/rllf/data/faithform.py) decomposes ProcessBench
+reasoning traces into atomic steps, corrupts each step (BrokenMath-style LLM
+perturbation), autoformalizes true and corrupted steps with four dedicated
+Lean autoformalizers, and runs DeepSeek-Prover-V2 on the result.  The verdict
+per (step variant, model) is `proof_result ∈ {Proved, Refuted, Unknown,
+TC-Fail, AF-Fail, Declarative}`.
+
+This repo asks: **is that verdict already readable from the autoformalizer's
+residual stream while it reads the step, before it writes any Lean?**  And
+can the direction that reads it be used to steer the formalization?
+
+| model key | Hugging Face id |
+|---|---|
+| `goedel`  | `Goedel-LM/Goedel-Formalizer-V2-8B` (thinking) |
+| `kimina`  | `AI-MO/Kimina-Autoformalizer-7B` |
+| `herald`  | `FrenzyMath/Herald_translator` |
+| `stepfun` | `stepfun-ai/StepFun-Formalizer-7B` (thinking, `<think>` appended to the prompt) |
+
+Prompts and chat formatting are the benchmark's verbatim
+(`leansteer/models/registry.py`).
+
+### Tasks (built per model, `leansteer/data/faithform.py`)
+
+| task | positives | negatives |
+|---|---|---|
+| `proved` | true step, Proved | everything else, subsampled to balance |
+| `proved_strict` | true step, Proved | corrupted step, Refuted |
+| `failing` | verdict ∉ {AF-Fail, TC-Fail} | AF-Fail or TC-Fail |
+| `sycophancy` | true step, Proved | corrupted step, Proved |
+
+`Declarative` steps were never autoformalized (no model output in the file)
+and are excluded.  Corrupted steps whose text equals the true step (30) are
+dropped.  `Unknown` (type-checks, prover undecided) counts as *not failing*.
+
+### Pipeline
+
+```
+collect   one prefill pass per step variant (~25.5k per model); residual stream at every
+          layer stored for three anchors: prompt_last, step_last, step_mean  (float16 memmaps)
+probe     per-layer logistic-regression probes, problems split train/test, layer selected on a
+          validation split of train; diff-of-means direction; TF-IDF and length text baselines;
+          cross-task transfer
+steer     add ±α·unit·v at the selected layer (last prompt token onward), regenerate greedily,
+          measure parse rate, statement change, (optional) Lean type-check, and for sycophancy
+          whether the corrupted step's statement coincides with the true step's; random-direction
+          control; all generations saved for later proving
+report    runs/<run>/report/summary.md + AUROC-by-layer plots
+```
+
+The anchors are all *pre-generation* on purpose: for corrupted steps the
+benchmark file stores the prover-side artefact in `autoformalizer_output`
+rather than the raw model response, so teacher-forcing the model's own output
+is only possible for half the rows.
+
+## Setup
+
+```bash
+conda create -n leansteer python=3.11 && conda activate leansteer
+pip install torch --index-url https://download.pytorch.org/whl/cu126   # driver on this box is CUDA 12.9
+pip install -e ".[dev]"
+python -m pytest -q
+```
+
+Paths: outputs go under `$LEANSTEER_SCRATCH` (default
+`/scratch/users/iacopog/leansteer`); the benchmark CSVs are read from
+`$FAITHFORM_ROOT` (default the Downloads supplement folder); model weights come
+from `$HF_HOME` (the shared cache on this machine already has all four).
+
+## Running
+
+```bash
+python -m leansteer.cli data     -c configs/default.yaml      # task sizes per model
+python -m leansteer.cli download -c configs/default.yaml      # no-op when cached
+CUDA_VISIBLE_DEVICES=3 python -m leansteer.cli collect -c configs/default.yaml --models goedel kimina
+python -m leansteer.cli probe    -c configs/default.yaml
+CUDA_VISIBLE_DEVICES=3 python -m leansteer.cli steer -c configs/default.yaml
+python -m leansteer.cli report   -c configs/default.yaml
+scripts/run_all.sh configs/smoke.yaml 3                          # end-to-end on 96 rows
+```
+
+Every stage is idempotent and resumable (`collect` by row, `steer` by
+generation).
+
+On this host GPUs are handed out by `gpuq`, and a plain background process is
+killed when the launching shell goes away, so use the launchers:
+
+```bash
+scripts/gpuq_stage.sh collect configs/default.yaml 3 30      # GPU stage beside your card 3, needs 30 GB
+scripts/gpuq_stage.sh steer   configs/default.yaml 3 45 --models goedel
+scripts/cpu_stage.sh   probe  configs/default.yaml --models goedel   # CPU stage as a user systemd unit
+scripts/cpu_stage.sh   report configs/default.yaml
+```
+
+GPU logs land in `~/gpuq-logs/<JOB>.log`, CPU logs in `$LEANSTEER_SCRATCH/logs/`.
+
+Any config entry can be overridden on the command line with dotted keys, e.g.
+`--set steer.batch_size=8 steer.max_new_tokens=1024` (Herald is a Llama-2
+model without grouped KV heads, so its generation batch must stay small).
+
+## Results of run `af_v1` (2026-10-16)
+
+Full tables and plots: `$LEANSTEER_SCRATCH/runs/af_v1/report/summary.md`.
+
+Test AUROC at the validation-selected layer, best of the two anchors; the
+TF-IDF text baseline in parentheses:
+
+| model | proved | proved_strict | failing | sycophancy |
+|---|---|---|---|---|
+| goedel  | 0.75 (0.59) | 0.80 (0.55) | 0.67 (0.68) | 0.78 (0.62) |
+| stepfun | 0.71 (0.59) | 0.78 (0.55) | 0.74 (0.70) | 0.77 (0.60) |
+| kimina  | 0.66 (0.59) | 0.73 (0.54) | 0.68 (0.68) | 0.75 (0.57) |
+| herald  | 0.69 (0.60) | 0.79 (0.56) | 0.67 (0.64) | 0.77 (0.58) |
+
+* `proved`, `proved_strict` and `sycophancy` share one direction (cross-task
+  transfer AUROC within ~0.03 of the native probe); `failing` is a separate
+  signal and sits at the text baseline for every model.
+* AUROC rises with depth and peaks in the last third of the network.
+* Steering (Kimina is the clearest case): pushing toward "not proved" along
+  the diff-of-means direction lowers the Lean type-check rate of the generated
+  statement dose-dependently (0.88 → 0.60 at α = −8 on `proved`, 0.94 → 0.77
+  on `proved_strict`), pushing toward "proved" keeps it at or above baseline,
+  and a random direction of the same magnitude changes the statement as often
+  without moving the type-check rate.  For the thinking models (Goedel,
+  StepFun) almost any intervention changes the statement and the type-check
+  proxy is close to saturated, so a prover pass over the saved generations is
+  the right behavioural readout.  Herald's effects are within noise.
+* The exact-match sycophancy proxy is weak (≤ 8 % of corrupted steps get a
+  statement identical to the true step's, even unsteered); judging sycophancy
+  behaviourally needs the prover.
+
+### Baselines and confounds (`baselines`, `modernbert` stages; prompt_last anchor)
+
+| model | task | probe | ModernBERT (step text) | nuisance | difficulty | covariates | oracle (other 7 formalizers) | probe gain beyond covariates | probe after regressing covariates out | R² of probe score on covariates | probe AUROC within n_others_proved strata |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| goedel | proved | **0.72** | 0.61 | 0.59 | 0.63 | 0.63 | 0.92 | +0.11 | 0.69 | 0.06 | 0.62 |
+| goedel | proved_strict | **0.77** | 0.57 | 0.53 | 0.54 | 0.54 | 0.98 | +0.23 | 0.76 | 0.00 | 0.68 |
+| goedel | failing | **0.67** | 0.72 | 0.67 | 0.81 | 0.81 | 0.75 | +0.00 | 0.56 | 0.15 | 0.66 |
+| goedel | sycophancy | **0.78** | 0.65 | 0.63 | 0.63 | 0.64 | 0.92 | +0.14 | 0.74 | 0.10 | 0.70 |
+| stepfun | proved | **0.71** | 0.63 | 0.61 | 0.67 | 0.68 | 0.90 | +0.07 | 0.65 | 0.13 | 0.62 |
+| stepfun | proved_strict | **0.77** | 0.55 | 0.53 | 0.54 | 0.55 | 0.99 | +0.22 | 0.76 | 0.01 | 0.68 |
+| stepfun | failing | **0.74** | 0.78 | 0.67 | 0.85 | 0.86 | 0.75 | +0.01 | 0.57 | 0.22 | 0.73 |
+| stepfun | sycophancy | **0.77** | 0.61 | 0.61 | 0.62 | 0.62 | 0.94 | +0.15 | 0.73 | 0.09 | 0.75 |
+| kimina | proved | **0.66** | 0.65 | 0.63 | 0.72 | 0.72 | 0.87 | +0.02 | 0.59 | 0.08 | 0.57 |
+| kimina | proved_strict | **0.70** | 0.55 | 0.55 | 0.57 | 0.58 | 0.98 | +0.12 | 0.68 | 0.01 | 0.64 |
+| kimina | failing | **0.68** | 0.74 | 0.66 | 0.85 | 0.85 | 0.70 | +0.00 | 0.52 | 0.18 | 0.68 |
+| kimina | sycophancy | **0.69** | 0.63 | 0.58 | 0.59 | 0.59 | 0.95 | +0.10 | 0.67 | 0.00 | 0.67 |
+| herald | proved | **0.64** | 0.65 | 0.62 | 0.67 | 0.68 | 0.88 | +0.02 | 0.59 | 0.05 | 0.53 |
+| herald | proved_strict | **0.71** | 0.59 | 0.53 | 0.55 | 0.56 | 0.99 | +0.14 | 0.69 | -0.01 | 0.64 |
+| herald | failing | **0.67** | 0.71 | 0.65 | 0.75 | 0.76 | 0.70 | +0.01 | 0.55 | 0.22 | 0.66 |
+| herald | sycophancy | **0.70** | 0.62 | 0.58 | 0.61 | 0.61 | 0.95 | +0.10 | 0.66 | 0.01 | 0.65 |
+
+* *nuisance* = step length/numbers/operators, position in the trace, anchor
+  entropy, TF-IDF-SVD of the step; *difficulty* = benchmark subset, number of
+  steps, leave-one-out proved/failing rate of the problem's other steps (this
+  model and pooled over all 8 formalizers), statement_type, proof_type;
+  *oracle* = the other 7 formalizers' verdicts on the same step variant, which
+  encode whether the step is true and formalizable (a ceiling, not a nuisance).
+* For `proved`, `proved_strict` and `sycophancy` the probe is **not** a
+  difficulty proxy: problem-level covariates reach only 0.54–0.72, explain
+  ≤ 13 % of the probe score, and the probe keeps 0.65–0.76 after they are
+  regressed out of the activations.  Its AUROC is flat across the four
+  benchmark subsets (also when trained within one subset) and across
+  statement types, and it still separates inside strata of "how many other
+  formalizers proved this step" (0.55–0.85 per stratum).  Its score correlates
+  with the other formalizers' verdicts (r ≈ 0.35–0.4), i.e. it reads the
+  step's truth/provability, which is the quantity of interest.
+* `failing` **is** largely a problem-level property: difficulty covariates
+  alone reach 0.75–0.86, the probe adds ≤ 0.01 on top and falls to 0.52–0.60
+  once they are regressed out; a ModernBERT classifier on the step text
+  (0.71–0.78) beats the pre-generation probe.
+* ModernBERT on the step text is below the probe on every model for
+  `proved`/`proved_strict`/`sycophancy` (0.55–0.65 vs 0.66–0.78).
+
+### Uncertainty (`uncertainty` stage)
+
+| model | task | AUROC (seed 0) | problem-bootstrap 95% CI | 5 split seeds, mean ± sd | TF-IDF, mean ± sd |
+|---|---|---|---|---|---|
+| goedel | proved | 0.723 | [0.707, 0.738] | 0.729 ± 0.004 | 0.576 ± 0.008 |
+| goedel | proved_strict | 0.774 | [0.760, 0.789] | 0.777 ± 0.003 | 0.545 ± 0.003 |
+| goedel | failing | 0.674 | [0.632, 0.710] | 0.667 ± 0.008 | 0.649 ± 0.021 |
+| goedel | sycophancy | 0.780 | [0.760, 0.800] | 0.782 ± 0.005 | 0.617 ± 0.008 |
+| stepfun | proved | 0.709 | [0.693, 0.726] | 0.711 ± 0.002 | 0.592 ± 0.011 |
+| stepfun | proved_strict | 0.773 | [0.758, 0.787] | 0.769 ± 0.007 | 0.548 ± 0.005 |
+| stepfun | failing | 0.737 | [0.706, 0.768] | 0.742 ± 0.007 | 0.696 ± 0.008 |
+| stepfun | sycophancy | 0.772 | [0.752, 0.791] | 0.776 ± 0.011 | 0.610 ± 0.005 |
+| kimina | proved | 0.660 | [0.639, 0.682] | 0.659 ± 0.015 | 0.597 ± 0.010 |
+| kimina | proved_strict | 0.696 | [0.676, 0.717] | 0.700 ± 0.008 | 0.538 ± 0.010 |
+| kimina | failing | 0.681 | [0.653, 0.709] | 0.680 ± 0.010 | 0.674 ± 0.012 |
+| kimina | sycophancy | 0.692 | [0.669, 0.715] | 0.684 ± 0.005 | 0.569 ± 0.005 |
+| herald | proved | 0.635 | [0.614, 0.655] | 0.624 ± 0.011 | 0.589 ± 0.011 |
+| herald | proved_strict | 0.706 | [0.687, 0.726] | 0.690 ± 0.011 | 0.555 ± 0.010 |
+| herald | failing | 0.666 | [0.643, 0.689] | 0.670 ± 0.005 | 0.653 ± 0.013 |
+| herald | sycophancy | 0.696 | [0.672, 0.719] | 0.704 ± 0.007 | 0.583 ± 0.007 |
+
+Intervals are about ±0.02 wide and split-to-split variation is ≤ 0.015, so
+every probe-vs-text gap reported above is many intervals wide.
+
+### Perturbation-confound controls (`controls` stage, plus the `perturbed_proved` / `perturbed_detect` tasks)
+
+In `sycophancy` and `proved_strict` every negative is a corrupted step, so a
+probe could be reading the corruption rather than provability.  The controls
+train directions that never see a perturbation label (`proved_unp`: Proved vs
+not among true steps) or only that label (`perturbed`: corrupted vs true, any
+verdict), and evaluate inside corrupted steps only (Proved vs Refuted — no
+confound) and on the sycophancy rows.
+
+| model | within corrupted (Proved vs Refuted): proved_unp dir / sycophancy dir / perturbed dir | sycophancy rows: proved_unp dir / perturbed dir / own dir | cos(sycophancy, perturbed) | sycophancy AUROC with perturbed dir projected out |
+|---|---|---|---|---|
+| goedel | 0.41 / 0.39 / 0.54 | 0.59 / 0.22 / 0.77 | -0.32 | 0.76 |
+| stepfun | 0.45 / 0.38 / 0.53 | 0.55 / 0.22 / 0.76 | -0.38 | 0.75 |
+| kimina | 0.45 / 0.44 / 0.51 | 0.57 / 0.28 / 0.69 | -0.35 | 0.66 |
+| herald | 0.51 / 0.44 / 0.51 | 0.54 / 0.28 / 0.70 | -0.28 | 0.67 |
+
+Per-layer probes trained *for* these distinctions (prompt_last, validation-selected layer):
+
+| model | corrupted-vs-true detector (`perturbed_detect`) | among corrupted: Proved vs Refuted (`perturbed_proved`) | `sycophancy` for reference |
+|---|---|---|---|
+| goedel | 0.78 (text 0.54) | 0.69 (text 0.64) | 0.78 |
+| stepfun | 0.76 (text 0.54) | 0.66 (text 0.62) | 0.77 |
+| kimina | 0.70 (text 0.54) | 0.56 (text 0.60) | 0.69 |
+| herald | 0.69 (text 0.54) | 0.59 (text 0.59) | 0.70 |
+
+**What this changes.** The pre-generation state carries a strong
+*truth/corruption* signal: a detector trained only on corrupted-vs-true
+reaches 0.69–0.80 while the same label is invisible in the text (TF-IDF 0.54,
+ModernBERT 0.55–0.65 on the related tasks).  The `sycophancy` and
+`proved_strict` probes largely inherit that signal: the corruption detector
+separates the sycophancy rows as well as the sycophancy probe itself (0.72–0.78
+with the sign flipped), the two directions are anti-aligned (cos −0.28 to
+−0.38 in 3.5–4k dimensions), and inside corrupted steps none of the
+pre-trained directions predicts which ones get sycophantically proved (0.39–0.54,
+i.e. chance or inverted).  A probe trained specifically for that question
+reaches only 0.56–0.69 against a text baseline of 0.59–0.64.  So the claim
+supported by the data is *"the model internally knows the step is false"*
+(and, among true steps, whether it is provable: 0.66–0.75), not *"the model
+knows it is about to repair the error"*.  The inversion inside corrupted steps
+(the steps that look *more* corrupted to the direction are the ones that get
+silently repaired) is consistent with repair being triggered by an obvious
+error, but it is a weak effect.
+
+### Abstention with the pre-generation probe (`abstain` stage)
+
+The probe is read before generation, so it cannot rerank samples, but it can
+*abstain*: refuse the steps whose state says the formalization will not be
+faithful.  On each model's held-out problems (all 7,860 step variants, the
+benchmark's own verdicts) we drop the q lowest-scoring rows and recompute the
+benchmark's faithfulness index FI = 2·TPR·(1−FPR)/(TPR+1−FPR).  Cells: FI on
+the remaining rows (share of the sycophantic cases, corrupted & Proved, that
+were removed).
+
+| model | no abstention | sycophancy dir, q = 0.2 | sycophancy dir, q = 0.3 | proved dir, q = 0.2 | corruption detector, q = 0.2 | TF-IDF text detector, q = 0.2 | random, q = 0.2 |
+|---|---|---|---|---|---|---|---|
+| goedel | 0.750 (TPR 0.73, FPR 0.23) | 0.782 (46%) | 0.803 (64%) | 0.771 (35%) | 0.754 (36%) | 0.745 (21%) | 0.752 (22%) |
+| stepfun | 0.664 (TPR 0.56, FPR 0.19) | 0.702 (54%) | 0.725 (75%) | 0.690 (28%) | 0.673 (39%) | 0.656 (23%) | 0.661 (21%) |
+| kimina | 0.559 (TPR 0.42, FPR 0.17) | 0.599 (42%) | 0.623 (69%) | 0.595 (19%) | 0.562 (35%) | 0.549 (22%) | 0.555 (21%) |
+| herald | 0.532 (TPR 0.39, FPR 0.17) | 0.568 (40%) | 0.593 (71%) | 0.566 (19%) | 0.540 (32%) | 0.532 (24%) | 0.534 (21%) |
+
+Abstaining on the 20 % of steps the sycophancy direction scores lowest raises
+FI by 0.03–0.04 for every model and removes 40–54 % of the sycophantic cases
+(random: 21 %; a text-based corruption detector: 21–24 %, with no FI gain);
+at 30 % the gain is 0.05–0.06 with 64–75 % of sycophantic cases removed.  The
+gain comes almost entirely from the FPR side (sycophantic formalizations are
+what gets refused) while TPR rises slightly.
+
+### Attention-head probes vs residual-stream probes (`collect-heads` / `probe-heads`; prompt_last anchor)
+
+Per-head probes read one head's output (the input of the layer's `o_proj`,
+128 features) at the same anchor and splits as the residual probes; *top-k*
+concatenates the k heads with the best validation AUROC anywhere in the
+network; *all heads of a layer* is the full d_model-dimensional attention
+output at the validation-selected layer. Heat-maps are in the report.
+
+| model | task | best single head | median / p90 head AUROC | heads > 0.6 | all heads of a layer | top-4 | top-16 | top-64 | residual probe |
+|---|---|---|---|---|---|---|---|---|---|
+| goedel | proved | L36H8 0.76 | 0.62 / 0.68 | 843/1152 | L36 0.78 | 0.80 | 0.81 | 0.79 | **L24 0.72** |
+| goedel | proved_strict | L36H8 0.79 | 0.59 / 0.67 | 508/1152 | L36 0.83 | 0.84 | 0.86 | 0.85 | **L36 0.77** |
+| goedel | failing | L28H28 0.73 | 0.71 / 0.73 | 1150/1152 | L32 0.64 | 0.70 | 0.65 | 0.67 | **L36 0.67** |
+| goedel | sycophancy | L23H15 0.79 | 0.65 / 0.71 | 1125/1152 | L23 0.84 | 0.82 | 0.84 | 0.87 | **L24 0.78** |
+| stepfun | proved | L24H26 0.67 | 0.63 / 0.67 | 649/784 | L21 0.72 | 0.72 | 0.73 | 0.73 | **L28 0.71** |
+| stepfun | proved_strict | L28H8 0.73 | 0.59 / 0.67 | 350/784 | L21 0.78 | 0.78 | 0.81 | 0.82 | **L28 0.77** |
+| stepfun | failing | L26H20 0.77 | 0.72 / 0.75 | 781/784 | L20 0.73 | 0.77 | 0.76 | 0.73 | **L24 0.74** |
+| stepfun | sycophancy | L16H20 0.76 | 0.64 / 0.71 | 698/784 | L20 0.80 | 0.84 | 0.85 | 0.85 | **L28 0.77** |
+| kimina | proved | L24H11 0.68 | 0.63 / 0.65 | 700/784 | L24 0.65 | 0.73 | 0.70 | 0.69 | **L28 0.66** |
+| kimina | proved_strict | L28H22 0.70 | 0.56 / 0.60 | 60/784 | L28 0.71 | 0.75 | 0.77 | 0.77 | **L28 0.70** |
+| kimina | failing | L8H26 0.71 | 0.68 / 0.70 | 781/784 | L14 0.68 | 0.71 | 0.70 | 0.69 | **L14 0.68** |
+| kimina | sycophancy | L28H22 0.71 | 0.60 / 0.63 | 415/784 | L28 0.71 | 0.80 | 0.79 | 0.79 | **L28 0.69** |
+| herald | proved | L15H16 0.67 | 0.63 / 0.66 | 883/960 | L29 0.66 | 0.71 | 0.71 | 0.70 | **L26 0.64** |
+| herald | proved_strict | L16H9 0.68 | 0.59 / 0.64 | 371/960 | L29 0.74 | 0.81 | 0.81 | 0.81 | **L16 0.71** |
+| herald | failing | L9H14 0.69 | 0.66 / 0.68 | 958/960 | L4 0.64 | 0.69 | 0.67 | 0.63 | **L2 0.67** |
+| herald | sycophancy | L16H9 0.74 | 0.61 / 0.66 | 742/960 | L16 0.75 | 0.82 | 0.81 | 0.79 | **L16 0.70** |
+
+* A **single** well-chosen head already matches the full residual probe
+  (within ±0.04 on every verdict task), and the signal is **sparse**: the
+  median head is near chance while a few dozen to a few hundred heads out of
+  ~800–1,150 exceed 0.6.
+* **Combining heads beats the residual probe** by 0.05–0.11 AUROC on
+  `proved`, `proved_strict` and `sycophancy` for every model (e.g. Goedel
+  sycophancy 0.87 with 64 heads vs 0.78; Herald proved_strict 0.81 with 16
+  heads vs 0.71; Kimina sycophancy 0.80 with 4 heads vs 0.69). Reading the
+  attention outputs before they are summed into the residual stream and mixed
+  with the MLP path recovers information the single residual direction
+  blurs. This is the ITI observation (Li et al., 2023) reproduced on
+  autoformalizers.
+* The best heads cluster in the last third of the network (L23–L36 for
+  Goedel, L24–L28 for Kimina/StepFun, L15–L29 for Herald), where the
+  residual probes also peak, and the same heads recur across the three
+  verdict tasks (e.g. Goedel L36H8, Kimina L28H22, Herald L16H9, StepFun
+  L28H8/L28H10).
+* `failing` behaves differently again: its best heads sit in the middle of
+  the network (L8–L28), gain nothing from concatenation, and stay at or below
+  the difficulty/ModernBERT baselines (0.75–0.86).
+
+### Teacher-forced anchors (`collect-tf` / `probe-tf`; unperturbed steps, model's own recorded output appended)
+
+| model | task | probe (statement_mean) | TF-IDF step | TF-IDF step + output | ModernBERT step + statement (3 seeds) |
+|---|---|---|---|---|---|
+| goedel | proved_unp | **0.86** | 0.69 | 0.82 | 0.83 ± 0.004 |
+| goedel | failing_unp | **0.92** | 0.65 | 0.89 | 0.92 ± 0.008 |
+| stepfun | proved_unp | **0.84** | 0.67 | 0.81 | 0.84 ± 0.002 |
+| stepfun | failing_unp | **0.92** | 0.69 | 0.89 | 0.93 ± 0.004 |
+| kimina | proved_unp | **0.82** | 0.63 | 0.76 | 0.83 ± 0.002 |
+| kimina | failing_unp | **0.96** | 0.67 | 0.91 | 0.97 ± 0.003 |
+| herald | proved_unp | **0.86** | 0.63 | 0.73 | 0.85 ± 0.004 |
+| herald | failing_unp | **0.91** | 0.64 | 0.78 | 0.92 ± 0.004 |
+
+After the model has written its formalization the verdict is far more
+readable (0.82–0.86 proved, 0.91–0.96 failing) — but so is it from the text:
+a ModernBERT fine-tuned on the step plus the Lean theorem the model wrote
+reaches 0.83–0.85 and 0.92–0.97, matching the post-output probes for every
+model.  Once the formalization exists, the verdict is in the text; the
+pre-generation signal is the one the activations add.
+
+ModernBERT on the step text alone, three seeds (pre-generation tasks):
+
+| model | proved | proved_strict | failing | sycophancy |
+|---|---|---|---|---|
+| goedel | 0.607 ± 0.003 | 0.567 ± 0.006 | 0.723 ± 0.007 | 0.652 ± 0.004 |
+| stepfun | 0.628 ± 0.001 | 0.557 ± 0.002 | 0.772 ± 0.006 | 0.623 ± 0.008 |
+| kimina | 0.645 ± 0.005 | 0.561 ± 0.014 | 0.735 ± 0.006 | 0.626 ± 0.007 |
+| herald | 0.653 ± 0.006 | 0.577 ± 0.015 | 0.715 ± 0.006 | 0.617 ± 0.001 |
+
+### Attention-head probes vs residual-stream probes (`collect-heads` / `probe-heads`; prompt_last anchor)
+
+Per-head probes read one head's output (the input of the layer's `o_proj`,
+128 features) at the same anchor and splits as the residual probes; *top-k*
+concatenates the k heads with the best validation AUROC anywhere in the
+network; *all heads of a layer* is the full d_model-dimensional attention
+output at the validation-selected layer. Heat-maps are in the report.
+
+| model | task | best single head | median / p90 head AUROC | heads > 0.6 | all heads of a layer | top-4 | top-16 | top-64 | residual probe |
+|---|---|---|---|---|---|---|---|---|---|
+| goedel | proved | L36H8 0.76 | 0.62 / 0.68 | 843/1152 | L36 0.78 | 0.80 | 0.81 | 0.79 | **L24 0.72** |
+| goedel | proved_strict | L36H8 0.79 | 0.59 / 0.67 | 508/1152 | L36 0.83 | 0.84 | 0.86 | 0.85 | **L36 0.77** |
+| goedel | failing | L28H28 0.73 | 0.71 / 0.73 | 1150/1152 | L32 0.64 | 0.70 | 0.65 | 0.67 | **L36 0.67** |
+| goedel | sycophancy | L23H15 0.79 | 0.65 / 0.71 | 1125/1152 | L23 0.84 | 0.82 | 0.84 | 0.87 | **L24 0.78** |
+| stepfun | proved | L24H26 0.67 | 0.63 / 0.67 | 649/784 | L21 0.72 | 0.72 | 0.73 | 0.73 | **L28 0.71** |
+| stepfun | proved_strict | L28H8 0.73 | 0.59 / 0.67 | 350/784 | L21 0.78 | 0.78 | 0.81 | 0.82 | **L28 0.77** |
+| stepfun | failing | L26H20 0.77 | 0.72 / 0.75 | 781/784 | L20 0.73 | 0.77 | 0.76 | 0.73 | **L24 0.74** |
+| stepfun | sycophancy | L16H20 0.76 | 0.64 / 0.71 | 698/784 | L20 0.80 | 0.84 | 0.85 | 0.85 | **L28 0.77** |
+| kimina | proved | L24H11 0.68 | 0.63 / 0.65 | 700/784 | L24 0.65 | 0.73 | 0.70 | 0.69 | **L28 0.66** |
+| kimina | proved_strict | L28H22 0.70 | 0.56 / 0.60 | 60/784 | L28 0.71 | 0.75 | 0.77 | 0.77 | **L28 0.70** |
+| kimina | failing | L8H26 0.71 | 0.68 / 0.70 | 781/784 | L14 0.68 | 0.71 | 0.70 | 0.69 | **L14 0.68** |
+| kimina | sycophancy | L28H22 0.71 | 0.60 / 0.63 | 415/784 | L28 0.71 | 0.80 | 0.79 | 0.79 | **L28 0.69** |
+| herald | proved | L15H16 0.67 | 0.63 / 0.66 | 883/960 | L29 0.66 | 0.71 | 0.71 | 0.70 | **L26 0.64** |
+| herald | proved_strict | L16H9 0.68 | 0.59 / 0.64 | 371/960 | L29 0.74 | 0.81 | 0.81 | 0.81 | **L16 0.71** |
+| herald | failing | L9H14 0.69 | 0.66 / 0.68 | 958/960 | L4 0.64 | 0.69 | 0.67 | 0.63 | **L2 0.67** |
+| herald | sycophancy | L16H9 0.74 | 0.61 / 0.66 | 742/960 | L16 0.75 | 0.82 | 0.81 | 0.79 | **L16 0.70** |
+
+* A **single** well-chosen head already matches the full residual probe
+  (within ±0.04 on every verdict task), and the signal is **sparse**: the
+  median head is near chance while a few dozen to a few hundred heads out of
+  ~800–1,150 exceed 0.6.
+* **Combining heads beats the residual probe** by 0.05–0.11 AUROC on
+  `proved`, `proved_strict` and `sycophancy` for every model (e.g. Goedel
+  sycophancy 0.87 with 64 heads vs 0.78; Herald proved_strict 0.81 with 16
+  heads vs 0.71; Kimina sycophancy 0.80 with 4 heads vs 0.69). Reading the
+  attention outputs before they are summed into the residual stream and mixed
+  with the MLP path recovers information the single residual direction
+  blurs. This is the ITI observation (Li et al., 2023) reproduced on
+  autoformalizers.
+* The best heads cluster in the last third of the network (L23–L36 for
+  Goedel, L24–L28 for Kimina/StepFun, L15–L29 for Herald), where the
+  residual probes also peak, and the same heads recur across the three
+  verdict tasks (e.g. Goedel L36H8, Kimina L28H22, Herald L16H9, StepFun
+  L28H8/L28H10).
+* `failing` behaves differently again: its best heads sit in the middle of
+  the network (L8–L28), gain nothing from concatenation, and stay at or below
+  the difficulty/ModernBERT baselines (0.75–0.86).
+
+### Teacher-forced anchors (`collect-tf` / `probe-tf`; unperturbed steps, model's own recorded output appended)
+
+| model | task | probe (statement_mean) | TF-IDF step | TF-IDF step + output |
+|---|---|---|---|---|
+| goedel | proved_unp | **0.86** | 0.69 | 0.82 |
+| goedel | failing_unp | **0.92** | 0.65 | 0.89 |
+| stepfun | proved_unp | **0.84** | 0.67 | 0.81 |
+| stepfun | failing_unp | **0.92** | 0.69 | 0.89 |
+| kimina | proved_unp | **0.82** | 0.63 | 0.76 |
+| kimina | failing_unp | **0.96** | 0.67 | 0.91 |
+| herald | proved_unp | **0.86** | 0.63 | 0.73 |
+| herald | failing_unp | **0.91** | 0.64 | 0.78 |
+
+After the model has written its formalization the verdict is far more
+readable (0.82–0.86 proved, 0.91–0.96 failing).  A TF-IDF classifier that
+also sees the Lean output matches Goedel's post-output probe but not
+Kimina's, Herald's or StepFun's.
+
+### Prover verdicts on the steered generations (`prove-gen` / `prove-verify`, 150 steps per class)
+
+DeepSeek-Prover-V2-7B, 2 samples for the statement and 2 for its full
+negation, Lean + Mathlib v4.33.1; steering along the diff-of-means direction
+in units of the class-mean distance, +α toward the positive class.  Each cell:
+outcome rate at α = −8 → 0 → +8, then the fitted effect over the α range with a
+permutation p-value (α shuffled within each step, 2000 permutations; bold if
+p < 0.01) and the random-direction rates at −8 / +8.
+
+| model | task | steps | Proved | Refuted | TC_Fail |
+|---|---|---|---|---|---|
+| goedel | proved | true (pos) | 0.77 → 0.77 → 0.73 (-0.01, p=0.676; rnd 0.78/0.79) | 0.03 → 0.03 → 0.07 (+0.02, p=0.266; rnd 0.05/0.04) | 0.04 → 0.03 → 0.01 (**-0.03, p=0.009**; rnd 0.06/0.02) |
+| goedel | proved | corrupted / not proved (neg) | 0.35 → 0.33 → 0.27 (-0.08, p=0.011; rnd 0.31/0.32) | 0.26 → 0.33 → 0.40 (**+0.15, p=0.000**; rnd 0.32/0.33) | 0.10 → 0.09 → 0.07 (**-0.05, p=0.007**; rnd 0.05/0.11) |
+| goedel | sycophancy | true (pos) | 0.76 → 0.79 → 0.76 (-0.01, p=0.654; rnd 0.77/0.78) | 0.08 → 0.07 → 0.09 (+0.02, p=0.294; rnd 0.05/0.07) | 0.07 → 0.03 → 0.05 (-0.02, p=0.300; rnd 0.04/0.06) |
+| goedel | sycophancy | corrupted / not proved (neg) | 0.39 → 0.38 → 0.39 (-0.03, p=0.507; rnd 0.38/0.36) | 0.27 → 0.32 → 0.31 (+0.07, p=0.042; rnd 0.29/0.32) | 0.07 → 0.07 → 0.06 (-0.03, p=0.118; rnd 0.05/0.03) |
+| stepfun | proved | true (pos) | 0.69 → 0.69 → 0.69 (+0.02, p=0.620; rnd 0.75/0.69) | 0.06 → 0.07 → 0.05 (+0.01, p=0.601; rnd 0.06/0.09) | 0.07 → 0.06 → 0.05 (-0.02, p=0.204; rnd 0.05/0.05) |
+| stepfun | proved | corrupted / not proved (neg) | 0.27 → 0.21 → 0.23 (-0.05, p=0.072; rnd 0.27/0.21) | 0.28 → 0.25 → 0.26 (+0.00, p=0.938; rnd 0.26/0.29) | 0.15 → 0.15 → 0.16 (+0.02, p=0.362; rnd 0.16/0.14) |
+| stepfun | sycophancy | true (pos) | 0.72 → 0.68 → 0.70 (-0.04, p=0.230; rnd 0.68/0.71) | 0.05 → 0.12 → 0.08 (+0.01, p=0.656; rnd 0.12/0.05) | 0.07 → 0.09 → 0.08 (+0.01, p=0.802; rnd 0.09/0.08) |
+| stepfun | sycophancy | corrupted / not proved (neg) | 0.37 → 0.37 → 0.39 (+0.03, p=0.380; rnd 0.34/0.37) | 0.36 → 0.32 → 0.32 (-0.03, p=0.428; rnd 0.35/0.35) | 0.11 → 0.13 → 0.06 (-0.04, p=0.085; rnd 0.11/0.09) |
+| kimina | proved | true (pos) | 0.37 → 0.60 → 0.61 (**+0.23, p=0.000**; rnd 0.59/0.56) | 0.15 → 0.15 → 0.11 (**-0.09, p=0.000**; rnd 0.11/0.16) | 0.32 → 0.05 → 0.04 (**-0.24, p=0.000**; rnd 0.05/0.06) |
+| kimina | proved | corrupted / not proved (neg) | 0.15 → 0.23 → 0.27 (**+0.13, p=0.000**; rnd 0.23/0.21) | 0.19 → 0.23 → 0.29 (**+0.10, p=0.000**; rnd 0.28/0.25) | 0.35 → 0.15 → 0.13 (**-0.22, p=0.000**; rnd 0.17/0.24) |
+| kimina | sycophancy | true (pos) | 0.61 → 0.62 → 0.58 (-0.03, p=0.083; rnd 0.64/0.61) | 0.14 → 0.15 → 0.13 (-0.02, p=0.303; rnd 0.14/0.12) | 0.05 → 0.03 → 0.04 (+0.00, p=1.000; rnd 0.02/0.08) |
+| kimina | sycophancy | corrupted / not proved (neg) | 0.34 → 0.33 → 0.32 (-0.02, p=0.354; rnd 0.36/0.34) | 0.33 → 0.37 → 0.38 (**+0.06, p=0.004**; rnd 0.37/0.31) | 0.05 → 0.03 → 0.02 (**-0.04, p=0.001**; rnd 0.02/0.09) |
+| herald | proved | true (pos) | 0.44 → 0.50 → 0.45 (+0.04, p=0.351; rnd 0.42/0.43) | 0.05 → 0.07 → 0.09 (+0.03, p=0.226; rnd 0.08/0.07) | 0.24 → 0.21 → 0.17 (-0.07, p=0.019; rnd 0.27/0.23) |
+| herald | proved | corrupted / not proved (neg) | 0.14 → 0.10 → 0.12 (-0.00, p=0.988; rnd 0.13/0.17) | 0.14 → 0.20 → 0.19 (+0.06, p=0.063; rnd 0.19/0.16) | 0.33 → 0.29 → 0.19 (**-0.11, p=0.002**; rnd 0.32/0.26) |
+| herald | sycophancy | true (pos) | 0.42 → 0.47 → 0.54 (+0.10, p=0.015; rnd 0.51/0.46) | 0.11 → 0.09 → 0.06 (-0.03, p=0.207; rnd 0.06/0.11) | 0.16 → 0.17 → 0.17 (+0.02, p=0.600; rnd 0.18/0.17) |
+| herald | sycophancy | corrupted / not proved (neg) | 0.23 → 0.29 → 0.26 (+0.02, p=0.692; rnd 0.21/0.22) | 0.17 → 0.21 → 0.22 (+0.05, p=0.142; rnd 0.23/0.23) | 0.16 → 0.25 → 0.26 (**+0.11, p=0.003**; rnd 0.27/0.19) |
+
+* **Kimina `proved` is causally steerable.** Along the "proved" direction the
+  proved rate of true steps rises 0.37 → 0.61 and that of negatives 0.15 → 0.27,
+  while type-check failures fall 0.32 → 0.04 (all p < 0.001); the random
+  direction of the same magnitude is flat.
+* Goedel's `proved` direction changes *how decisively* it formalizes
+  negatives (refutations 0.26 → 0.40, p < 0.001) rather than whether they get
+  proved; Herald's reduces type-check failures (p ≈ 0.002); StepFun shows
+  nothing.
+* **No model shows a prover-level effect on sycophancy**: the proved rate of
+  corrupted steps is flat under steering for all four (p > 0.3).  The
+  sycophancy direction is readable (AUROC 0.75–0.80) but, at this layer and
+  magnitude, not a lever on the behaviour.
+
+### Power and the null steering results at 300 steps per class
+
+The residual-stream steering was repeated with 300 steps per class on the
+tasks that showed no effect at 150 (sycophancy for all models; `proved` for
+Goedel, StepFun, Herald), nesting the earlier selection and reusing its
+unsteered generations; dm direction, α ∈ ±4, ±8, random control at ±8.
+*MDE* is the minimal detectable difference between the α = 0 and α = ±8
+proved rates at 80 % power and 5 % two-sided error (2.8·√(2p(1−p)/n)); the
+within-step permutation slope test over five α values is more powerful than
+that two-cell comparison.
+
+| model | task | steps | n | Proved rate at −8 → 0 → +8 | effect over range (perm. p) | random −8 / +8 | MDE |
+|---|---|---|---|---|---|---|---|
+| goedel | proved | true (pos) | 300 | 0.77 → 0.79 → 0.75 | -0.021 (p=0.355) | 0.81 / 0.80 | ±0.09 |
+| goedel | proved | corrupted / not proved (neg) | 300 | 0.31 → 0.32 → 0.27 | -0.043 (p=0.064) | 0.28 / 0.31 | ±0.11 |
+| goedel | sycophancy | true (pos) | 294 | 0.74 → 0.79 → 0.74 | +0.001 (p=0.978) | 0.76 / 0.77 | ±0.09 |
+| goedel | sycophancy | corrupted / not proved (neg) | 300 | 0.41 → 0.37 → 0.38 | -0.047 (p=0.099) | 0.35 / 0.37 | ±0.11 |
+| stepfun | proved | true (pos) | 300 | 0.69 → 0.68 → 0.69 | +0.017 (p=0.459) | 0.72 / 0.68 | ±0.11 |
+| stepfun | proved | corrupted / not proved (neg) | 300 | 0.28 → 0.23 → 0.25 | -0.033 (p=0.108) | 0.25 / 0.25 | ±0.10 |
+| stepfun | sycophancy | true (pos) | 292 | 0.68 → 0.69 → 0.70 | -0.007 (p=0.779) | 0.68 / 0.68 | ±0.11 |
+| stepfun | sycophancy | corrupted / not proved (neg) | 300 | 0.36 → 0.36 → 0.38 | +0.015 (p=0.586) | 0.37 / 0.37 | ±0.11 |
+| kimina | proved | true (pos) | 155 | 0.38 → 0.61 → 0.63 | **+0.233 (p=0.000)** | 0.60 / 0.57 | ±0.15 |
+| kimina | proved | corrupted / not proved (neg) | 157 | 0.15 → 0.22 → 0.28 | **+0.138 (p=0.000)** | 0.22 / 0.20 | ±0.13 |
+| kimina | sycophancy | true (pos) | 297 | 0.64 → 0.64 → 0.61 | -0.031 (p=0.049) | 0.65 / 0.62 | ±0.11 |
+| kimina | sycophancy | corrupted / not proved (neg) | 300 | 0.32 → 0.32 → 0.33 | +0.016 (p=0.355) | 0.35 / 0.32 | ±0.11 |
+| herald | proved | true (pos) | 300 | 0.44 → 0.53 → 0.45 | +0.023 (p=0.378) | 0.42 / 0.50 | ±0.11 |
+| herald | proved | corrupted / not proved (neg) | 300 | 0.16 → 0.16 → 0.15 | +0.001 (p=0.962) | 0.14 / 0.18 | ±0.08 |
+| herald | sycophancy | true (pos) | 293 | 0.39 → 0.47 → 0.53 | **+0.124 (p=0.000)** | 0.51 / 0.51 | ±0.12 |
+| herald | sycophancy | corrupted / not proved (neg) | 300 | 0.20 → 0.29 → 0.27 | +0.039 (p=0.139) | 0.24 / 0.26 | ±0.10 |
+
+With 300 steps per class, no model shows a change in the proved rate of
+corrupted steps under the sycophancy direction (effects −0.05 to +0.04, all
+p > 0.09, MDE ≈ 0.11), and the `proved` direction remains without effect on
+provability for Goedel, StepFun and Herald (|effect| ≤ 0.04).  Kimina's
+`proved` effect (+0.23 on true steps, +0.14 on negatives) is unchanged.  The
+only new significant trend is Herald `sycophancy` on true steps (+0.12,
+p < 0.001), driven by the −α side (0.39 at −8 vs 0.47 unsteered; random at
+−8 is 0.51), i.e. pushing *away* from "true" degrades Herald's provability of
+true steps — the same degradation pattern seen elsewhere, not a sycophancy
+effect.  So the null is now: **no steering effect on sycophancy larger than
+about 0.1 for any model.**
+
+### Attention-head steering (`steer-heads` / `prove-heads-*`): ITI-style intervention on the top-16 heads
+
+For each task the 16 heads with the best validation AUROC (prompt_last) get
+`α · |μ₊ − μ₋|_h · d_h` added to their output from the last prompt token
+onward, with `d_h` the head's unit diff-of-means (or a random unit vector for
+the control); α ∈ ±8, ±16, ±32 per head (|μ₊ − μ₋|_h is 0.1–1.3 against head
+norms of 2–15, so α = 32 moves a head by a few times its norm). Same 150
+steps per class and the same unsteered generations as the residual
+experiment; DeepSeek-Prover-V2 verdicts and the within-step permutation test
+as above. Cells: rate at α = −32 → 0 → +32, effect over the range with its
+p-value (bold if p < 0.01), random-direction rates at −32 / +32.
+
+| model | task | steps | Proved | Refuted | TC_Fail |
+|---|---|---|---|---|---|
+| goedel | proved | true (pos) | 0.61 → 0.77 → 0.67 (+0.01, p=0.728; rnd 0.77/0.79) | 0.12 → 0.03 → 0.10 (+0.02, p=0.495; rnd 0.04/0.02) | 0.08 → 0.03 → 0.03 (**-0.04, p=0.004**; rnd 0.03/0.02) |
+| goedel | proved | corrupted / not proved (neg) | 0.27 → 0.33 → 0.29 (+0.02, p=0.453; rnd 0.29/0.33) | 0.25 → 0.33 → 0.36 (**+0.11, p=0.002**; rnd 0.31/0.26) | 0.15 → 0.09 → 0.11 (-0.02, p=0.209; rnd 0.09/0.14) |
+| goedel | sycophancy | true (pos) | 0.53 → 0.79 → 0.55 (-0.01, p=0.880; rnd 0.67/0.75) | 0.10 → 0.07 → 0.11 (+0.03, p=0.274; rnd 0.07/0.08) | 0.15 → 0.03 → 0.09 (-0.05, p=0.011; rnd 0.07/0.02) |
+| goedel | sycophancy | corrupted / not proved (neg) | 0.29 → 0.38 → 0.31 (-0.05, p=0.265; rnd 0.35/0.37) | 0.11 → 0.32 → 0.27 (**+0.17, p=0.000**; rnd 0.24/0.28) | 0.17 → 0.07 → 0.09 (**-0.06, p=0.004**; rnd 0.11/0.05) |
+| stepfun | proved | true (pos) | 0.65 → 0.69 → 0.71 (+0.02, p=0.640; rnd 0.68/0.72) | 0.06 → 0.07 → 0.09 (+0.03, p=0.203; rnd 0.07/0.05) | 0.07 → 0.06 → 0.05 (-0.01, p=0.513; rnd 0.08/0.05) |
+| stepfun | proved | corrupted / not proved (neg) | 0.24 → 0.21 → 0.21 (-0.03, p=0.338; rnd 0.22/0.25) | 0.29 → 0.25 → 0.28 (-0.02, p=0.456; rnd 0.27/0.26) | 0.13 → 0.15 → 0.18 (+0.06, p=0.010; rnd 0.17/0.16) |
+| stepfun | sycophancy | true (pos) | 0.60 → 0.68 → 0.64 (+0.03, p=0.376; rnd 0.65/0.68) | 0.09 → 0.12 → 0.10 (+0.02, p=0.540; rnd 0.10/0.10) | 0.13 → 0.08 → 0.06 (**-0.07, p=0.002**; rnd 0.11/0.05) |
+| stepfun | sycophancy | corrupted / not proved (neg) | 0.29 → 0.37 → 0.35 (+0.07, p=0.045; rnd 0.32/0.42) | 0.35 → 0.32 → 0.35 (+0.01, p=0.890; rnd 0.30/0.31) | 0.12 → 0.13 → 0.11 (-0.02, p=0.408; rnd 0.15/0.07) |
+| kimina | proved | true (pos) | 0.57 → 0.60 → 0.47 (**-0.11, p=0.000**; rnd 0.59/0.55) | 0.15 → 0.15 → 0.12 (-0.02, p=0.454; rnd 0.11/0.19) | 0.06 → 0.05 → 0.19 (**+0.12, p=0.000**; rnd 0.09/0.04) |
+| kimina | proved | corrupted / not proved (neg) | 0.25 → 0.23 → 0.19 (-0.06, p=0.021; rnd 0.22/0.23) | 0.28 → 0.23 → 0.21 (**-0.08, p=0.002**; rnd 0.27/0.28) | 0.15 → 0.15 → 0.29 (**+0.13, p=0.000**; rnd 0.22/0.18) |
+| kimina | sycophancy | true (pos) | 0.60 → 0.62 → 0.60 (-0.01, p=0.794; rnd 0.63/0.63) | 0.13 → 0.15 → 0.14 (+0.01, p=0.626; rnd 0.17/0.11) | 0.04 → 0.03 → 0.03 (-0.01, p=0.231; rnd 0.02/0.03) |
+| kimina | sycophancy | corrupted / not proved (neg) | 0.35 → 0.33 → 0.33 (-0.03, p=0.320; rnd 0.32/0.35) | 0.38 → 0.37 → 0.39 (+0.02, p=0.396; rnd 0.37/0.35) | 0.05 → 0.03 → 0.03 (-0.01, p=0.231; rnd 0.04/0.04) |
+| herald | proved | true (pos) | 0.45 → 0.50 → 0.32 (**-0.14, p=0.001**; rnd 0.43/0.49) | 0.06 → 0.07 → 0.08 (+0.04, p=0.106; rnd 0.10/0.07) | 0.23 → 0.21 → 0.21 (+0.02, p=0.625; rnd 0.24/0.24) |
+| herald | proved | corrupted / not proved (neg) | 0.17 → 0.10 → 0.07 (**-0.11, p=0.001**; rnd 0.15/0.13) | 0.19 → 0.20 → 0.19 (+0.03, p=0.427; rnd 0.18/0.15) | 0.14 → 0.29 → 0.37 (**+0.19, p=0.000**; rnd 0.33/0.31) |
+| herald | sycophancy | true (pos) | 0.13 → 0.48 → 0.30 (**+0.15, p=0.001**; rnd 0.34/0.41) | 0.03 → 0.09 → 0.24 (**+0.19, p=0.000**; rnd 0.10/0.09) | 0.17 → 0.16 → 0.16 (-0.04, p=0.208; rnd 0.27/0.18) |
+| herald | sycophancy | corrupted / not proved (neg) | 0.03 → 0.29 → 0.23 (**+0.18, p=0.000**; rnd 0.16/0.27) | 0.03 → 0.21 → 0.26 (**+0.20, p=0.000**; rnd 0.15/0.14) | 0.18 → 0.25 → 0.26 (+0.05, p=0.167; rnd 0.41/0.24) |
+
+* **Head steering is not a lever on provability or sycophancy for any model.**
+  The proved rate of corrupted steps (the sycophancy readout) is flat along
+  the "unperturbed/proved" direction for Goedel, Kimina and StepFun; Herald's
+  collapse at α = −32 (proved 0.03, refuted 0.03) is output breakage, not
+  faithful refutation (the random direction at −32 is at 0.16).
+* Where effects are significant they are **degradation**, not the probe's
+  semantics: Kimina's "proved" direction at +32 *lowers* the proved rate of
+  true steps (0.60 → 0.47) by raising type-check failures (0.05 → 0.19), the
+  opposite sign of the residual-stream result (0.60 → 0.61, TC-fail 0.05 →
+  0.04 along the same semantic direction); Herald loses provability at both
+  extremes.
+* The one semantic trend that recurs is Goedel's: along +α negatives get
+  *refuted* more often (0.25 → 0.36 on `proved`, 0.11 → 0.27 on
+  `sycophancy`, both p ≤ 0.002, random flat), the same "more decisive
+  formalization of false steps" seen with residual steering.
+* Reading and writing come apart: the top heads carry the verdict signal
+  more cleanly than any residual direction (AUROC up to 0.87 vs 0.78), but
+  adding their class-mean difference to their outputs does not reproduce the
+  one causal effect the residual direction had (Kimina provability) and does
+  not touch sycophancy. The heads look like *readers* of the step's truth
+  rather than the circuit that decides how faithfully to formalize it.
+
+### Steering coverage (`steer-variant`): layers, multi-layer, chain-of-thought-only, ITI σ-scaled heads, projection ablation
+
+Five further intervention families, each on the same 150-per-class rows with
+DeepSeek-Prover verdicts (report sections *steering variant …*): the dm
+direction at the 50 %, 75 % and 100 % depth layers and the selected layer
+(`layer_sweep`, α ±8); dm at every other layer of the upper half at once,
+each scaled by its own class gap (`multi_layer`, α ±4); dm at the selected
+layer applied only to generated tokens (`cot_only`, α ±8); the top-16 heads
+with ITI's unit, the standard deviation of each head's projection
+(`heads_sigma`, α ±15); and projection ablation at the selected layer —
+the dm component of every input set to the training mean, the positive-class
+mean or the negative-class mean (`ablate`), with a random direction as
+control.
+
+The one-number summary for the sycophancy task is whether any condition
+raises the benchmark's faithfulness index on the evaluation rows (true steps
+proved more, corrupted steps proved less).  Best ΔFI over the family's
+conditions (cells with ≥ 100 steps) / best ΔFI of the matching random control:
+
+| family | goedel | stepfun | kimina | herald |
+|---|---|---|---|---|
+| residual (steer) | +0.011 (dm +4) / +0.000 | +0.020 (dm -4) / -0.008 | +0.002 (dm -8) / -0.009 | +0.051 (dm +8) / +0.047 |
+| heads top-16 | +0.014 (dm -8) / -0.007 | +0.014 (dm -8) / +0.015 | +0.006 (dm +8) / +0.013 | +0.050 (dm +8) / -0.034 |
+| layer_sweep | +0.004 (dm_L27 +8) / +0.050 | +0.026 (dm_L28 -8) / +0.048 | +0.004 (dm_L14 -8) / -0.013 | +0.078 (dm_L16 +8) / +0.057 |
+| multi_layer | -0.695 (dm_multi -4) / -0.118 | -0.013 (dm_multi -4) / +0.006 | -0.021 (dm_multi +4) / -0.013 | -0.562 (dm_multi -4) / +0.016 |
+| cot_only | +0.001 (dm_L24 -8) / +0.032 | +0.023 (dm_L28 -8) / -0.008 | -0.011 (dm_L28 -8) / -0.037 | +0.078 (dm_L16 +8) / +0.064 |
+| heads_sigma | -0.007 (dm_hsig +15) / -0.088 | -0.012 (dm_hsig +15) / +0.028 | +0.012 (dm_hsig +15) / -0.004 | -0.078 (dm_hsig +15) / -0.184 |
+| ablate | +0.022 (project_pos_mean +1) / – | +0.002 (project_mean +1) / – | -0.003 (project_random +1) / – | +0.023 (project_neg_mean +1) / – |
+
+* **No intervention raises FI beyond its random control.** The largest
+  gains (+0.05 to +0.08, Herald) are matched by random directions of the
+  same magnitude (+0.05 to +0.06); the thinking models never exceed +0.03.
+  Where a single number moved "the right way" (e.g. Goedel at layer 18, −α
+  lowers the proved rate of corrupted steps 0.38 → 0.23), the same
+  intervention lowers the proved rate of true steps as much (0.79 → 0.59):
+  degradation, not selectivity.
+* `multi_layer` at α ±4 destroys the thinking models' outputs (proved rate
+  0.00), while the random multi-layer control keeps 0.17–0.57: the summed
+  class-gap steps along the direction are far more disruptive than random
+  ones of the same size, which says the direction is *read* downstream but
+  pushes the model off-distribution rather than toward faithfulness.
+* **Ablation does nothing to sycophancy** (|Δ| ≤ 0.05, p > 0.1 for Goedel,
+  Kimina and Herald; StepFun's −0.12 to −0.17 on corrupted steps comes with
+  −0.11 to −0.21 on true steps, i.e. degradation).  Removing the single
+  class-mean component at the selected layer also does **not** remove
+  Kimina's provability behaviour (−0.01 to −0.05): the representation that
+  drives it is redundant across directions and layers.
+* **Kimina's provability effect is robust in kind but local in place**: it
+  survives steering only the generated tokens (+0.24 on true steps, TC-fail
+  0.05 → 0.32 at −8) and is present at the last layer only (L28: +0.24; L14,
+  L21: ≤ 0.05); ITI σ-scaled heads at ±15 degrade it symmetrically (0.60 →
+  0.52 / 0.42, random 0.37).
+
+Taken together with the residual and head results above, the sycophancy
+null now covers two sites (residual stream, attention heads), four layers,
+multi-layer and generation-only application, two step-size conventions,
+additive and subtractive (ablation) interventions, and 150–300 steps per
+class.
+
+### Generalization beyond FaithformBench (`ext-*` stages)
+
+#### PRM800K (phase-2 test, human step ratings)
+
+800 true (+1) and 800 false (−1) rated completions over 210 problems, mathematical statements only (digit/operator/LaTeX, 15–300 characters, no answer lines); the label is the human rating, so a *false* step is one a labeler marked incorrect — this includes steps that are wrong in strategy rather than false propositions.
+
+Benchmark metrics of the four autoformalizers on this data (our prover pass, benchmark protocol):
+
+| model | TPR | FPR | FI |
+|---|---|---|---|
+| goedel | 0.61 | 0.45 | 0.58 |
+| kimina | 0.34 | 0.23 | 0.47 |
+| herald | 0.35 | 0.28 | 0.47 |
+| stepfun | 0.41 | 0.28 | 0.52 |
+
+Truth (true vs false step) from the prompt_last state — FaithformBench directions applied *without retraining*, a probe retrained on this data (5-fold problem-grouped CV at the benchmark's layer), the best layer of a CV sweep (optimistic), and TF-IDF text (CV):
+
+| model | corruption-detector dir | sycophancy dir | proved_strict dir | retrained CV | best-layer CV | TF-IDF CV |
+|---|---|---|---|---|---|---|
+| goedel | 0.66 | 0.59 | 0.68 | 0.73 | 0.74 (L24) | 0.69 |
+| kimina | 0.51 | 0.50 | 0.54 | 0.66 | 0.70 (L12) | 0.69 |
+| herald | 0.59 | 0.56 | 0.62 | 0.67 | 0.71 (L20) | 0.69 |
+| stepfun | 0.59 | 0.56 | 0.59 | 0.72 | 0.74 (L20) | 0.69 |
+
+Verdict tasks defined on our prover's verdicts (bench direction / retrained CV / TF-IDF CV):
+
+| model | task | n (pos) | bench dir | retrained CV | TF-IDF CV |
+|---|---|---|---|---|---|
+| goedel | sycophancy | 852 (490) | 0.55 | 0.70 | 0.62 |
+| goedel | proved_strict | 649 (490) | 0.72 | 0.76 | 0.62 |
+| kimina | sycophancy | 448 (271) | 0.53 | 0.69 | 0.60 |
+| kimina | proved_strict | 476 (271) | 0.58 | 0.74 | 0.64 |
+| herald | sycophancy | 498 (283) | 0.56 | 0.70 | 0.58 |
+| herald | proved_strict | 438 (283) | 0.63 | 0.77 | 0.65 |
+| stepfun | sycophancy | 539 (322) | 0.55 | 0.65 | 0.67 |
+| stepfun | proved_strict | 497 (322) | 0.60 | 0.71 | 0.67 |
+
+#### miniF2F (valid + test, corrupted with the benchmark's adversary prompt)
+
+488 informal statements and 486 LLM corruptions (Gemma-3-12B-it, the benchmark's own 'mathematical adversary' prompt; median edit similarity 0.99, 15 rewrites); each statement is a full competition problem, not an atomic step.
+
+Benchmark metrics of the four autoformalizers on this data (our prover pass, benchmark protocol):
+
+| model | TPR | FPR | FI |
+|---|---|---|---|
+| goedel | 0.51 | 0.10 | 0.65 |
+| kimina | 0.43 | 0.09 | 0.58 |
+| herald | 0.36 | 0.12 | 0.51 |
+| stepfun | 0.42 | 0.07 | 0.57 |
+
+Truth (true vs false step) from the prompt_last state — FaithformBench directions applied *without retraining*, a probe retrained on this data (5-fold problem-grouped CV at the benchmark's layer), the best layer of a CV sweep (optimistic), and TF-IDF text (CV):
+
+| model | corruption-detector dir | sycophancy dir | proved_strict dir | retrained CV | best-layer CV | TF-IDF CV |
+|---|---|---|---|---|---|---|
+| goedel | 0.57 | 0.53 | 0.56 | 0.60 | 0.61 (L24) | 0.55 |
+| kimina | 0.52 | 0.51 | 0.50 | 0.60 | 0.62 (L8) | 0.55 |
+| herald | 0.54 | 0.55 | 0.53 | 0.60 | 0.61 (L4) | 0.55 |
+| stepfun | 0.56 | 0.55 | 0.54 | 0.59 | 0.61 (L24) | 0.55 |
+
+Verdict tasks defined on our prover's verdicts (bench direction / retrained CV / TF-IDF CV):
+
+| model | task | n (pos) | bench dir | retrained CV | TF-IDF CV |
+|---|---|---|---|---|---|
+| goedel | sycophancy | 299 (249) | 0.54 | 0.62 | 0.66 |
+| goedel | proved_strict | 439 (249) | 0.58 | 0.57 | 0.54 |
+| kimina | sycophancy | 251 (209) | 0.44 | 0.61 | 0.58 |
+| kimina | proved_strict | 366 (209) | 0.55 | 0.60 | 0.56 |
+| herald | sycophancy | 234 (175) | 0.68 | 0.71 | 0.65 |
+| herald | proved_strict | 332 (175) | 0.46 | 0.61 | 0.56 |
+| stepfun | sycophancy | 237 (203) | 0.61 | 0.73 | 0.66 |
+| stepfun | proved_strict | 369 (203) | 0.56 | 0.59 | 0.54 |
+
+#### Refinement 1 — PRM800K restricted to steps that assert a claim (`prm800k_claims`)
+
+A Gemma-3-12B-it judge (scripts/judge_prm800k.py) read each rated step with
+its problem and preceding steps and answered TRUE_CLAIM / FALSE_CLAIM /
+NO_CLAIM.  Of 5,067 steps rated −1, only 1,687 were judged to assert a false
+claim (3,310 assert a *true* claim — a rejected strategy, not a false
+proposition; 70 assert nothing); of 5,000 steps rated +1, 4,494 were judged
+TRUE_CLAIM (337 FALSE_CLAIM, 169 NO_CLAIM).  The refined set keeps only
+steps where rating and judge agree: 800 true (+1 & TRUE_CLAIM) and 800 false
+(−1 & FALSE_CLAIM).
+
+| model | TPR | FPR | FI |
+|---|---|---|---|
+| goedel | 0.64 | 0.38 | 0.63 |
+| kimina | 0.35 | 0.19 | 0.49 |
+| herald | 0.36 | 0.22 | 0.49 |
+| stepfun | 0.46 | 0.24 | 0.57 |
+
+| model | corruption-detector dir | proved_strict dir | retrained CV | best-layer CV | TF-IDF CV |
+|---|---|---|---|---|---|
+| goedel | 0.70 | 0.68 | 0.77 | 0.78 (L24) | 0.63 |
+| kimina | 0.59 | 0.57 | 0.67 | 0.71 (L16) | 0.63 |
+| herald | 0.64 | 0.61 | 0.73 | 0.73 (L16) | 0.63 |
+| stepfun | 0.66 | 0.64 | 0.75 | 0.75 (L20) | 0.63 |
+
+| model | task | n (pos) | bench dir | retrained CV | TF-IDF CV |
+|---|---|---|---|---|---|
+| goedel | sycophancy | 818 (517) | 0.63 | 0.73 | 0.64 |
+| goedel | proved_strict | 703 (517) | 0.77 | 0.85 | 0.64 |
+| kimina | sycophancy | 423 (276) | 0.51 | 0.67 | 0.57 |
+| kimina | proved_strict | 512 (276) | 0.63 | 0.79 | 0.63 |
+| herald | sycophancy | 460 (286) | 0.60 | 0.69 | 0.56 |
+| herald | proved_strict | 500 (286) | 0.64 | 0.76 | 0.61 |
+| stepfun | sycophancy | 548 (362) | 0.59 | 0.66 | 0.64 |
+| stepfun | proved_strict | 557 (362) | 0.64 | 0.83 | 0.58 |
+
+With label noise removed the picture changes: probes retrained on PRM800K
+read truth at 0.67–0.77 against text at 0.63 (Goedel +0.14, StepFun +0.12,
+Herald +0.10, Kimina +0.04), the FaithformBench corruption-detector transfers
+at 0.59–0.70 without retraining, and provability probes are far above text
+(`proved_strict` 0.76–0.85 vs 0.58–0.64; the benchmark direction alone
+0.63–0.77).  The autoformalizers' false-positive rate also falls (0.19–0.38 vs
+0.23–0.45), i.e. part of the apparent sycophancy on raw PRM800K was label
+semantics.
+
+#### Refinement 2 — miniF2F plus 1,500 Lean-Workbook statements (`minif2f_ext`)
+
+1,988 competition statements (488 miniF2F + 1,500 Lean-Workbook problems
+filtered to statement-like text), 1,970 corruptions with the same adversary
+prompt; 3,958 rows, 12,876 prover statements.
+
+| model | TPR | FPR | FI |
+|---|---|---|---|
+| goedel | 0.35 | 0.14 | 0.49 |
+| kimina | 0.28 | 0.10 | 0.43 |
+| herald | 0.31 | 0.15 | 0.46 |
+| stepfun | 0.27 | 0.10 | 0.41 |
+
+| model | corruption-detector dir | proved_strict dir | retrained CV | best-layer CV | TF-IDF CV |
+|---|---|---|---|---|---|
+| goedel | 0.57 | 0.57 | 0.66 | 0.69 (L20) | 0.64 |
+| kimina | 0.52 | 0.50 | 0.69 | 0.70 (L8) | 0.64 |
+| herald | 0.53 | 0.55 | 0.67 | 0.69 (L8) | 0.64 |
+| stepfun | 0.54 | 0.59 | 0.71 | 0.71 (L28) | 0.64 |
+
+| model | task | n (pos) | bench dir | retrained CV | TF-IDF CV |
+|---|---|---|---|---|---|
+| goedel | sycophancy | 954 (686) | 0.60 | 0.69 | 0.66 |
+| goedel | proved_strict | 1334 (686) | 0.62 | 0.76 | 0.70 |
+| kimina | sycophancy | 753 (565) | 0.52 | 0.69 | 0.62 |
+| kimina | proved_strict | 1201 (565) | 0.56 | 0.77 | 0.72 |
+| herald | sycophancy | 916 (622) | 0.61 | 0.70 | 0.64 |
+| herald | proved_strict | 1235 (622) | 0.53 | 0.76 | 0.69 |
+| stepfun | sycophancy | 742 (536) | 0.61 | 0.68 | 0.63 |
+| stepfun | proved_strict | 1184 (536) | 0.68 | 0.77 | 0.71 |
+
+With four times the data the corruption becomes readable but only modestly
+above text: retrained probes 0.67–0.71 vs TF-IDF 0.64 (the Lean-Workbook
+corruptions are more text-detectable than miniF2F's), FaithformBench
+directions still transfer weakly (0.52–0.59).  Provability probes retrained
+here beat text by 0.05–0.08 on `proved_strict` (0.76–0.77 vs 0.69–0.72) and
+by 0.04–0.07 on `sycophancy`.  The autoformalizers prove only 27–35 % of the
+true Lean-Workbook statements (harder, longer problems) and 10–15 % of the
+corrupted ones.
+
+**Revised reading.** The pre-generation state carries a truth/provability
+signal on all four external sets, and its size depends on label quality and
+on how atomic the statement is: on clean claim-level labels (PRM800K claims)
+it exceeds text by 0.04–0.14 for truth and by 0.15–0.25 for provability
+verdicts, approaching the in-benchmark picture; on full competition problems
+with single-edit corruptions it exceeds text by only a few hundredths.  The
+specific FaithformBench directions transfer partially (0.6–0.7 on claim-level
+steps for Goedel/StepFun, near chance on long problems), so the *representation*
+generalizes better than the *direction*: a probe must be refitted on the new
+distribution, but the signal it finds is the same kind, at the same layers.
+
+**Original reading (before the refinements).** Generalization looked weak on the raw sets:
+
+* **PRM800K.** The FaithformBench directions transfer weakly without
+  retraining (truth AUROC 0.51–0.66; Goedel best), i.e. the direction that
+  reads "corrupted" in FaithformBench is not the direction that reads
+  "incorrect" in PRM800K.  Probes *retrained* on PRM800K read human-labelled
+  correctness at 0.70–0.74, but a TF-IDF text model reaches 0.69 on the same
+  rows, so unlike FaithformBench (0.69–0.80 vs 0.54) the activations add
+  little beyond text here.  On the verdict side, retrained probes beat text
+  on `proved_strict` by 0.05–0.11 (0.72–0.77 vs 0.62–0.66) and Goedel's
+  benchmark direction transfers to it (0.72).  The models prove PRM800K's
+  false steps 23–45 % of the time (FI 0.47–0.58): PRM800K's −1 label marks
+  reasoning the labeler rejected, not necessarily a false proposition, so
+  part of this "sycophancy" is label semantics.
+* **miniF2F.** With the benchmark's own corruption recipe on full competition
+  problems, the corruption is barely readable anywhere: FaithformBench
+  directions 0.50–0.57, retrained probes 0.59–0.62 at any layer, text 0.55.
+  The autoformalizers are also much more faithful here (FPR 0.07–0.12,
+  FI 0.51–0.65 vs 0.53–0.75 on the benchmark): a one-number change in a
+  long problem statement is formalized literally and refuted, so there is
+  less sycophancy to read.  With 486 corruptions the CV AUROCs carry
+  ≈ ±0.04 of noise.
+* What does generalize: probes retrained on either dataset at the same
+  layers read provability-related verdicts above text (`proved_strict`,
+  `failing` on miniF2F 0.65–0.88), and the layer profile (mid-to-late layers)
+  is the same.  What does not: the specific FaithformBench truth/corruption
+  direction, which appears tuned to atomic ProcessBench steps and
+  BrokenMath-style corruptions.
+
+### Prover robustness (`relabel-*` stages): Goedel-Prover-V2-8B instead of DeepSeek-Prover-V2
+
+1,500 held-out step variants per model, the benchmark's own statements
+re-proved with Goedel-Prover-V2-8B (1 sample, 4096-token cap, full
+negation).  Verdict agreement with the benchmark: goedel 0.72 (proved-vs-not 0.88); kimina 0.74 (proved-vs-not 0.90); herald 0.78 (proved-vs-not 0.93); stepfun 0.74 (proved-vs-not 0.90); disagreements are
+almost all DeepSeek Proved/Refuted → Goedel Unknown (one sample, token cap).
+
+| model | task | fixed probe: benchmark labels | fixed probe: Goedel-Prover labels | CV probe trained on benchmark labels | CV probe trained on Goedel-Prover labels | fixed probe on rows where both provers agree |
+|---|---|---|---|---|---|---|
+| goedel | proved | 0.72 | 0.71 | 0.67 | 0.64 | 0.73 |
+| goedel | proved_strict | 0.83 | 0.81 | 0.66 | 0.66 | 0.81 |
+| goedel | failing | 0.69 | 0.57 | 0.66 | 0.65 | 0.68 |
+| goedel | sycophancy | 0.85 | 0.87 | 0.67 | 0.71 | 0.87 |
+| kimina | proved | 0.72 | 0.71 | 0.61 | 0.63 | 0.73 |
+| kimina | proved_strict | 0.82 | 0.79 | 0.62 | 0.61 | 0.80 |
+| kimina | failing | 0.69 | 0.67 | 0.66 | 0.64 | 0.69 |
+| kimina | sycophancy | 0.89 | 0.83 | 0.57 | 0.61 | 0.88 |
+| herald | proved | 0.67 | 0.65 | 0.58 | 0.59 | 0.67 |
+| herald | proved_strict | 0.87 | 0.84 | 0.66 | 0.64 | 0.87 |
+| herald | failing | 0.64 | 0.63 | 0.59 | 0.60 | 0.64 |
+| herald | sycophancy | 0.90 | 0.89 | 0.64 | 0.66 | 0.91 |
+| stepfun | proved | 0.71 | 0.72 | 0.64 | 0.64 | 0.74 |
+| stepfun | proved_strict | 0.83 | 0.83 | 0.63 | 0.64 | 0.83 |
+| stepfun | failing | 0.76 | 0.70 | 0.73 | 0.67 | 0.75 |
+| stepfun | sycophancy | 0.90 | 0.88 | 0.67 | 0.64 | 0.90 |
+
+The probes read the same thing under either prover: AUROC against the new
+labels is within ≈ 0.03 of AUROC against the benchmark labels on the same
+rows for every model and task (the one larger drop, Goedel `failing`, is the
+task already shown to be a problem-level property), and probes re-trained on
+Goedel-Prover labels match those trained on DeepSeek labels.  (The fixed
+direction scores higher here than on the full test set because this subset is
+uniformly sampled rather than class-balanced.)
+
+Pitfall hit on the way: under transformers ≥ 5 Herald's tokenizer resolves to
+the slow `LlamaTokenizer`, which drops every space; `load_tokenizer` now forces
+the `tokenizer.json` backend and asserts that prompts round-trip.
+
+## Layout
+
+```
+leansteer/
+  config.py             scratch / HF cache paths
+  data/faithform.py     loader, verdict normalisation, tasks, grouped splits, statement extraction
+  models/registry.py    the four models + verbatim prompts
+  models/backend.py     HF backend: anchor capture at all layers, steer/project hooks, greedy generation
+  models/download.py    snapshot_download of the four repos
+  run/collect.py        activation collection (memmap store, resumable)
+  analysis/probes.py    per-layer probes, baselines, direction export, cross-task transfer
+  run/steer.py          steering experiment + generation-level metrics
+  analysis/lean.py      optional Lean type-check against a built Mathlib
+  analysis/report.py    markdown + plots
+  cli.py
+configs/                default.yaml, smoke.yaml
+tests/                  task construction, statement extraction, hook/anchor correctness on a tiny model
+```

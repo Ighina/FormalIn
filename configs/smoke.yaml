@@ -1,0 +1,19 @@
+# Smoke test: one model, 96 step variants, few layers, tiny steering budget.
+run_name: smoke
+models: [kimina]
+limit: 96
+collect:
+  anchors: [prompt_last, step_last, step_mean]
+  batch_size: 16
+  layer_stride: 7
+analysis:
+  layer_stride: 1
+  anchors: [prompt_last]
+  n_jobs: 4
+steer:
+  tasks: [failing]
+  alphas: [-4, 4]
+  random_alphas: [4]
+  n_per_class: 4
+  max_new_tokens: 128
+  batch_size: 8
