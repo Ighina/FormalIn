@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 import numpy as np
 from tqdm import tqdm
 
-from leansteer.data.faithform import load_af, unique_steps
+from leansteer.data.faithform import load_af, prompt_inputs, unique_steps, use_context
 from leansteer.experiment import Run
 from leansteer.models.backend import HFBackend
 from leansteer.models.registry import get_spec
@@ -67,9 +67,9 @@ def collect_steps(cfg: dict, model: str, steps, out: Path, backend: Optional[HFB
     anchors = list(cc["anchors"])
 
     prompts, spans, plens = [], [], []
-    for step in steps.step_content:
-        p = backend.prompt(step)
-        idx, n = backend.step_span(p, step)
+    for step, text in zip(steps.step_content, prompt_inputs(steps, cfg)):
+        p = backend.prompt(text)
+        idx, n = backend.step_span(p, step)   # the step's own tokens (last occurrence), context excluded
         prompts.append(p); spans.append(idx); plens.append(n)
     order = np.argsort(-np.asarray(plens), kind="stable")
     uids = [steps.uid.iloc[i] for i in order]
@@ -77,7 +77,7 @@ def collect_steps(cfg: dict, model: str, steps, out: Path, backend: Optional[HFB
 
     index_path, prog_path, meta_path = out / "index.json", out / "progress.json", out / "meta.jsonl"
     index = {"model": model, "hf_id": backend.spec.hf_id, "uids": uids, "layers": layers, "hidden_size": d,
-             "anchors": anchors, "n_layers_model": backend.n_layers}
+             "anchors": anchors, "n_layers_model": backend.n_layers, "context": use_context(cfg)}
     if index_path.exists():
         prev = json.loads(index_path.read_text())
         if prev["uids"] != uids or prev["layers"] != layers or prev["anchors"] != anchors:
@@ -152,8 +152,8 @@ def run_collect_tf(cfg: dict, model: str, backend: Optional[HFBackend] = None) -
     max_tokens = int(tc["max_output_tokens"])
 
     texts, spans, lens, keep, has_stmt = [], [], [], [], []
-    for step, output, stmt in zip(df.step_content, df.autoformalizer_output, df.statement):
-        p = backend.prompt(step)
+    for text, output, stmt in zip(prompt_inputs(df, cfg), df.autoformalizer_output, df.statement):
+        p = backend.prompt(text)
         o = output
         if backend.spec.assistant_prefix and o.startswith(backend.spec.assistant_prefix):
             o = o[len(backend.spec.assistant_prefix):]
@@ -176,7 +176,7 @@ def run_collect_tf(cfg: dict, model: str, backend: Optional[HFBackend] = None) -
 
     index_path, prog_path, meta_path = out / "index.json", out / "progress.json", out / "meta.jsonl"
     index = {"model": model, "hf_id": backend.spec.hf_id, "uids": uids, "layers": layers, "hidden_size": d, "anchors": anchors,
-             "n_layers_model": backend.n_layers, "skipped": [df.uid.iloc[i] for i in np.flatnonzero(~keep)]}
+             "n_layers_model": backend.n_layers, "skipped": [df.uid.iloc[i] for i in np.flatnonzero(~keep)], "context": use_context(cfg)}
     if index_path.exists():
         prev = json.loads(index_path.read_text())
         if prev["uids"] != uids or prev["layers"] != layers or prev["anchors"] != anchors:
@@ -249,8 +249,8 @@ def run_collect_heads(cfg: dict, model: str, backend: Optional[HFBackend] = None
     n_heads, head_dim = backend.head_layout()
 
     prompts, spans, plens = [], [], []
-    for step in steps.step_content:
-        p = backend.prompt(step)
+    for step, text in zip(steps.step_content, prompt_inputs(steps, cfg)):
+        p = backend.prompt(text)
         idx, n = backend.step_span(p, step)
         prompts.append(p); spans.append(idx); plens.append(n)
     order = np.argsort(-np.asarray(plens), kind="stable")

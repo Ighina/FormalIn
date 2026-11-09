@@ -97,6 +97,10 @@ def text_baselines(tr: pd.DataFrame, te: pd.DataFrame, C: float) -> dict:
         vec2 = TfidfVectorizer(ngram_range=(1, 2), min_df=2, sublinear_tf=True, max_features=200000).fit(txt(tr))
         m2 = LogisticRegression(C=1.0, class_weight="balanced", max_iter=3000).fit(vec2.transform(txt(tr)), tr.label)
         out["tfidf_output_auc"] = _auc(te.label.to_numpy(), m2.decision_function(vec2.transform(txt(te))))
+    if "informal" in tr.columns and (tr.informal != tr.step_content).any():   # context runs: text that sees the parents too
+        vec3 = TfidfVectorizer(ngram_range=(1, 2), min_df=2, sublinear_tf=True, max_features=200000).fit(tr.informal)
+        m3 = LogisticRegression(C=1.0, class_weight="balanced", max_iter=3000).fit(vec3.transform(tr.informal), tr.label)
+        out["tfidf_context_auc"] = _auc(te.label.to_numpy(), m3.decision_function(vec3.transform(te.informal)))
     L = lambda d: np.c_[np.log1p(d.step_content.str.len()), np.log1p(d.step_content.str.split().str.len())]
     m = LogisticRegression(class_weight="balanced").fit(L(tr), tr.label)
     out["length_auc"] = _auc(te.label.to_numpy(), m.decision_function(L(te)))

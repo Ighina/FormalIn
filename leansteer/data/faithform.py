@@ -18,6 +18,12 @@ Facts about the file that shape this module (verified on the data):
   dropped (same input, contradictory labels).
 * Every perturbed node has an unperturbed counterpart with the same
   ``(problem_id, node_id)``; that pairing is what the sycophancy analysis uses.
+* ``dependencies_content`` lists the step's DAG parents (true steps).  The
+  benchmark formalized every step *with* those parents in the prompt
+  (``DAGNode.contextualized``: a ``<context>`` block, then "Based on the
+  context, formalize the following statement: <step>").  ``informal`` holds
+  that exact text; ``data.context: true`` in the config makes every prompt
+  site use it instead of the bare step (see :func:`prompt_inputs`).
 
 Tasks (positives / negatives), each built per autoformalizer:
 
@@ -28,6 +34,7 @@ Tasks (positives / negatives), each built per autoformalizer:
 """
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,13 +92,46 @@ def extract_statement(text: Optional[str]) -> Optional[str]:
     return None
 
 
+# --------------------------------------------------------------------------- context
+def parse_dependencies(value) -> List[str]:
+    """``dependencies_content`` cell (a Python-list literal) -> list of parent step texts."""
+    if not isinstance(value, str) or not value.strip():
+        return []
+    try:
+        v = ast.literal_eval(value)
+    except (ValueError, SyntaxError):
+        return []
+    return [str(x) for x in v] if isinstance(v, (list, tuple)) else []
+
+
+def contextualize(step: str, parents: Sequence[str]) -> str:
+    """Byte-for-byte the benchmark's ``DAGNode.contextualized()`` (parents are
+    already sorted by node id in the file)."""
+    if not parents:
+        return step
+    ctx = "<context>\n" + "".join(f"{p}\n" for p in parents) + "</context>\n"
+    return ctx.strip() + "\nBased on the context, formalize the following statement: " + step
+
+
+def use_context(cfg: Optional[dict]) -> bool:
+    return bool(((cfg or {}).get("data") or {}).get("context", False))
+
+
+def prompt_inputs(df: pd.DataFrame, cfg: Optional[dict]) -> pd.Series:
+    """The informal text each prompt carries: the contextualized step when
+    ``data.context`` is on and the frame has it, else the bare step."""
+    if use_context(cfg) and "informal" in df.columns:
+        return df.informal
+    return df.step_content
+
+
 # --------------------------------------------------------------------------- loading
 def load_af(root: Path | str = config.FAITHFORM_ROOT, models: Sequence[str] = AF_MODELS,
             drop_declarative: bool = True, with_outputs: bool = False) -> pd.DataFrame:
     """Long table, one row per (step variant, model), verdicts normalised."""
     root = Path(root)
     cols = ["problem_id", "node_id", "is_perturbed", "type_of_perturbation", "autoformalizer_model",
-            "proof_result", "step_content"]
+            "proof_result", "step_content", "dependencies_content"]
     if with_outputs:
         cols += ["autoformalizer_output", "prover_output"]
     df = pd.read_csv(root / "Faithform-AF.csv", usecols=cols, low_memory=False)
@@ -104,6 +144,10 @@ def load_af(root: Path | str = config.FAITHFORM_ROOT, models: Sequence[str] = AF
         df = df[df.verdict != DECLARATIVE]
     df["subset"] = df.problem_id.str.split("-").str[0]
     df["uid"] = [make_uid(p, n, x) for p, n, x in zip(df.problem_id, df.node_id, df.is_perturbed)]
+    cache: Dict[str, List[str]] = {}
+    df["context"] = [cache.setdefault(v, parse_dependencies(v)) if isinstance(v, str) else [] for v in df.dependencies_content]
+    df["informal"] = [contextualize(st, cx) for st, cx in zip(df.step_content, df.context)]
+    df = df.drop(columns=["dependencies_content"])
 
     # drop perturbed variants whose text equals the true step
     truth = df[~df.is_perturbed].drop_duplicates(["problem_id", "node_id"]).set_index(["problem_id", "node_id"]).step_content
@@ -118,8 +162,8 @@ def load_af(root: Path | str = config.FAITHFORM_ROOT, models: Sequence[str] = AF
 
 def unique_steps(df: pd.DataFrame) -> pd.DataFrame:
     """One row per step variant (``uid``) — the inputs the models read."""
-    return (df.drop_duplicates("uid")[["uid", "problem_id", "node_id", "is_perturbed", "step_content", "subset"]]
-            .reset_index(drop=True))
+    cols = ["uid", "problem_id", "node_id", "is_perturbed", "step_content", "subset"] + [c for c in ("context", "informal") if c in df.columns]
+    return df.drop_duplicates("uid")[cols].reset_index(drop=True)
 
 
 # --------------------------------------------------------------------------- tasks

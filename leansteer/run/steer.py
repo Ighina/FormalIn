@@ -39,7 +39,7 @@ from tqdm import tqdm
 
 from leansteer.analysis import lean as leancheck
 from leansteer.analysis.probes import load_direction
-from leansteer.data.faithform import build_task, extract_statement, load_af, make_uid, problem_split
+from leansteer.data.faithform import build_task, extract_statement, load_af, make_uid, problem_split, prompt_inputs
 from leansteer.experiment import Run, write_json
 from leansteer.models.backend import HFBackend, Intervention
 from leansteer.run.collect import get_backend
@@ -180,7 +180,7 @@ def run_steer_heads(cfg: dict, model: str, tasks: Optional[List[str]] = None, ba
         rows = pick_eval_rows(df, task, cfg)
         if cfg.get("limit"):
             rows = rows.head(int(cfg["limit"]))
-        prompts = [backend.prompt(s) for s in rows.step_content]
+        prompts = [backend.prompt(s) for s in prompt_inputs(rows, cfg)]
         log.info("[%s/%s] head steering on %d heads %s; mean |dm| %.3f (mean head act norm %.1f) on %d rows", model, task, k,
                  [f"L{l}H{h}" for l, h in heads[:8]] + (["..."] if k > 8 else []),
                  float(np.mean([st["dm_norm"] for st in stats.values()])), float(np.mean([st["act_norm"] for st in stats.values()])), len(rows))
@@ -250,7 +250,7 @@ def run_steer(cfg: dict, model: str, tasks: Optional[List[str]] = None, backend:
         rows = pick_eval_rows(df, task, cfg)
         if cfg.get("limit"):
             rows = rows.head(int(cfg["limit"]))
-        prompts = [backend.prompt(s) for s in rows.step_content]
+        prompts = [backend.prompt(s) for s in prompt_inputs(rows, cfg)]
         log.info("[%s/%s] steering L%d unit=|dm|=%.3f (gap along probe %.3f, cos(dm,probe) %.2f, resid norm %.1f) on %d rows",
                  model, task, layer, unit, gap, float(dirs["dm"] @ v), cs["resid_norm"], len(rows))
         d = run.steer_dir(model, task)

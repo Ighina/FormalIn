@@ -33,7 +33,7 @@ import pandas as pd
 import torch
 
 from leansteer.analysis.probes import load_direction
-from leansteer.data.faithform import extract_statement, load_af
+from leansteer.data.faithform import extract_statement, load_af, prompt_inputs
 from leansteer.experiment import Run, write_json
 from leansteer.models.backend import HFBackend, Intervention
 from leansteer.run.collect import get_backend
@@ -77,7 +77,7 @@ def run_steer_variant(cfg: dict, model: str, variant: str, tasks: Optional[List[
         rows = pick_eval_rows(df, task, cfg)
         if cfg.get("limit"):
             rows = rows.head(int(cfg["limit"]))
-        prompts = [backend.prompt(s) for s in rows.step_content]
+        prompts = [backend.prompt(s) for s in prompt_inputs(rows, cfg)]
         d = run.steer_dir(model, task, name)
         _seed_from_base(run, model, task, name, rows)
         gen_path = d / "generations.jsonl"

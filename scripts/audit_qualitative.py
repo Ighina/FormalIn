@@ -6,7 +6,8 @@ validation-selected layer (prompt_last anchor), decision = coef_std · ((h − m
 + intercept, predicted positive iff decision > 0 (direction_L<k>.npz fields)."""
 from __future__ import annotations
 
-import json, re, sys
+import json
+import os, re, sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -20,9 +21,10 @@ from leansteer.data.faithform import load_af, build_task, problem_split, extract
 from leansteer.run.collect import load_acts  # noqa: E402
 from leansteer import config as lcfg  # noqa: E402
 
-cfg = load_config("configs/default.yaml"); run = Run(cfg)
-OUT = Path(lcfg.SCRATCH_ROOT) / "audit"; OUT.mkdir(exist_ok=True)
-MODELS = ["goedel", "stepfun", "kimina", "herald"]
+CFG = os.environ.get("AUDIT_CONFIG", "configs/default.yaml")
+cfg = load_config(CFG); run = Run(cfg)
+OUT = Path(lcfg.SCRATCH_ROOT) / "audit" / cfg["run_name"] if cfg["run_name"] != "af_v1" else Path(lcfg.SCRATCH_ROOT) / "audit"; OUT.mkdir(parents=True, exist_ok=True)
+MODELS = list(cfg["models"])
 seed, test_frac = int(cfg["analysis"]["seed"]), cfg["analysis"]["test_frac"]
 
 PROCEDURAL = re.compile(r"^(i |we |let's|let us|now |next |then |first|so i|to (find|solve|get|compute|do)|compute|calculate|find|solve|substitut|simplif|expand|multipl|divid|add |subtract|rewrite|plug|apply|use |using|consider|notice|note that|recall|check|try|want|need)", re.I)

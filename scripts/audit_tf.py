@@ -1,5 +1,6 @@
 """Check 3: teacher-forced (own-output appended) probes partitioned by output-failure category."""
-import json, sys
+import json
+import os, sys
 from pathlib import Path
 import numpy as np, pandas as pd
 from sklearn.metrics import roc_auc_score
@@ -7,11 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from leansteer.experiment import load_config, Run
 from leansteer.data.faithform import load_af, problem_split, extract_statement, PROVED, FAILING
 from leansteer import config as lcfg
-cfg = load_config("configs/default.yaml"); run = Run(cfg); seed = int(cfg["analysis"]["seed"])
-OUT = Path(lcfg.SCRATCH_ROOT) / "audit"
+CFG = os.environ.get("AUDIT_CONFIG", "configs/default.yaml")
+cfg = load_config(CFG); run = Run(cfg); seed = int(cfg["analysis"]["seed"])
+OUT = Path(lcfg.SCRATCH_ROOT) / "audit" / cfg["run_name"] if cfg["run_name"] != "af_v1" else Path(lcfg.SCRATCH_ROOT) / "audit"; OUT.mkdir(parents=True, exist_ok=True)
 def auc(y, s): return float(roc_auc_score(y, s)) if len(np.unique(y)) == 2 else float("nan")
 res = {}
-for model in ["goedel", "stepfun", "kimina", "herald"]:
+for model in cfg["models"]:
     df = load_af(models=[model], with_outputs=True)
     df = df[~df.is_perturbed].drop_duplicates("uid").set_index("uid")
     acts = run.model_dir(model) / "acts_tf"; index = json.loads((acts / "index.json").read_text())
