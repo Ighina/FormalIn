@@ -355,9 +355,9 @@ P(verify([("files", "`<model>/probes_heads/prompt_last/<task>/{result.json,heads
 P("""## 7. Abstention: the applied use of the probe
 
 **TL;DR.** Refusing the 20 % of steps the sycophancy direction scores lowest
-raises the benchmark's faithfulness index by 0.03–0.04 for every model and
-removes 40–54 % of sycophantic cases (random 21 %, a text corruption detector
-21–24 % with no gain).
+lowers the benchmark's UFLB (unfaithfulness lower bound, lower is better) for
+every model and removes 40–54 % of sycophantic cases (random 21 %, a text
+corruption detector 21–24 %).
 
 """)
 rows = []
@@ -368,10 +368,10 @@ for m in MODELS:
     b = r["base"]
     def cell(s, q):
         c = [x for x in r["curves"][s] if x["q"] == q][0]
-        return f"{f(c['FI'], 3)} ({c['sycophantic_removed']:.0%})"
-    rows.append([m, f"{f(b['FI'], 3)} (TPR {f(b['TPR'])}, FPR {f(b['FPR'])})", cell("sycophancy_dir", 0.2), cell("sycophancy_dir", 0.3), cell("proved_dir", 0.2), cell("detect_dir", 0.2), cell("tfidf_detect", 0.2), cell("random", 0.2)])
+        return f"{f(c['UFLB'], 3)} ({c['sycophantic_removed']:.0%})"
+    rows.append([m, f"{f(b['UFLB'], 3)} (FNR {f(b['FNR'])}, FPR {f(b['FPR'])}, AFFR {f(b['AFFR'])})", cell("sycophancy_dir", 0.2), cell("sycophancy_dir", 0.3), cell("proved_dir", 0.2), cell("detect_dir", 0.2), cell("tfidf_detect", 0.2), cell("random", 0.2)])
 P(tbl(["model", "no abstention", "sycophancy dir q=0.2", "sycophancy dir q=0.3", "proved dir q=0.2", "corruption detector q=0.2", "TF-IDF detector q=0.2", "random q=0.2"], rows))
-P("Cells: FI on the remaining held-out rows (share of sycophantic cases removed). FI = 2·TPR·(1−FPR)/(TPR+1−FPR) over all step variants of the held-out problems, using the benchmark's own verdicts.\n\n")
+P("Cells: UFLB on the remaining held-out rows (share of sycophantic cases removed). UFLB = ½FNR + ½FPR + AFFR over all step variants of the held-out problems, using the benchmark's own verdicts (FaithformBench final metric, arXiv:2608.10916; lower is better).\n\n")
 P(verify([("file", "`<model>/abstain/results.json` (curves for q ∈ {0, .05, .1, .2, .3, .5})"), ("code", "`analysis/abstain.py::run_abstain`, `metrics`"),
           ("recompute", "`python -m leansteer.cli abstain -c configs/default.yaml --models <m>`")]))
 
@@ -385,8 +385,8 @@ random direction flat) and changes how decisively Goedel formalizes false
 steps; it does nothing to sycophancy in any model (300 steps per class,
 minimal detectable effect ≈ 0.11). Head steering, other layers, multi-layer,
 chain-of-thought-only, ITI σ-scaled heads and projection ablation do not
-change that: no intervention raises the faithfulness index on the sycophancy
-rows beyond its random control.
+change that: no intervention lowers UFLB on the sycophancy rows beyond its
+random control.
 
 ### 8.1 Protocol
 
@@ -456,12 +456,14 @@ P(verify([("files", "`prove_<variant>/results.json`, `<model>/steer_<variant>/<t
           ("code", "`run/variants.py::run_steer_variant`; variant specs in `configs/default.yaml::variants`"),
           ("recompute", "`steer-variant --variant <v>` → `prove-variant-gen --variant <v>` → `prove-variant-verify --variant <v>`")]))
 
-# FI summary across sets
-P("### 8.5 One-number summary: does any intervention raise the faithfulness index on the sycophancy rows?\n\n")
+# UFLB summary across sets
+P("### 8.5 One-number summary: does any intervention lower UFLB on the sycophancy rows?\n\n")
+from leansteer.analysis.metrics import uflb_from_rates  # noqa: E402
 
 
-def fi(tpr, fpr):
-    return 2 * tpr * (1 - fpr) / (tpr + (1 - fpr)) if tpr + (1 - fpr) > 0 else float("nan")
+def uflb_cells(c1, c0):
+    """UFLB from the per-cell rates of the true (c1) and corrupted (c0) evaluation rows."""
+    return uflb_from_rates(c1["refuted_rate"], c0["proved_rate"], c1["tc_fail_rate"] + c1["af_fail_rate"], c0["tc_fail_rate"] + c0["af_fail_rate"])
 
 
 sets = {"residual (steer)": "prove", "heads top-16": "prove_heads"} | {v: f"prove_{v}" for v in cfg["variants"]}
@@ -476,22 +478,26 @@ for name, folder in sets.items():
         base = {x["label"]: x for x in tab if x["model"] == m and x["alpha"] == 0.0}
         if 1 not in base or 0 not in base:
             cells.append("–"); continue
-        b_fi = fi(base[1]["proved_rate"], base[0]["proved_rate"])
-        best = {"dir": -9, "rnd": -9}
+        b_u = uflb_cells(base[1], base[0])
+        best = {"dir": 9, "rnd": 9}
         for d, a in sorted({(x["direction"], x["alpha"]) for x in tab if x["model"] == m and x["alpha"] != 0.0}):
             c = {x["label"]: x for x in tab if x["model"] == m and x["direction"] == d and x["alpha"] == a}
             if 1 not in c or 0 not in c or c[0]["n"] < 100:
                 continue
-            delta = fi(c[1]["proved_rate"], c[0]["proved_rate"]) - b_fi
+            delta = uflb_cells(c[1], c[0]) - b_u
             key = "rnd" if ("random" in d) else "dir"
-            best[key] = max(best[key], delta)
-        cells.append(f"{best['dir']:+.3f} / {best['rnd']:+.3f}" if best["dir"] > -9 else "–")
+            best[key] = min(best[key], delta)
+        cells.append(f"{best['dir']:+.3f} / {best['rnd']:+.3f}" if best["dir"] < 9 else "–")
     rows.append([name] + cells)
 P(tbl(["intervention family", *MODELS], rows))
-P("Cells: best ΔFI over the family's non-random conditions / best ΔFI of its random control (cells with ≥ 100 steps; FI from the per-cell proved rates in `results.json::table`).\n\n")
+P("Cells: largest UFLB *decrease* (ΔUFLB, negative = more faithful) over the family's non-random conditions / the same for its random control (cells with ≥ 100 steps; UFLB from the per-cell Proved/Refuted/TC_Fail/AF_Fail rates in `results.json::table`).\n\n")
 P(verify([("files", "`prove*/results.json::table`"), ("code", "this script, `build_background.py` (same arithmetic as the README section)")]))
-P("""_Interpretation (human):_ no family beats its random control (thinking
-models ≤ +0.03; Herald's +0.05–0.08 matched by random). Numbers that look
+P("""_Interpretation (human):_ no family lowers UFLB beyond its random control at a
+matched magnitude. The thinking models' best decreases are ≤ 0.03 except
+StepFun's layer sweep (−0.057), where random does better (−0.074); Herald's
+head steering shows −0.075 at α = −8, but the head family has random controls
+only at ±32, where steering is far worse than random (outputs collapse), and
+the −8 gain is mostly fewer type-check failures. Numbers that look
 anti-sycophantic at a single layer come with an equal drop on true steps.
 Multi-layer steering at α ±4 destroys the thinking models' outputs where random
 directions do not; ablation leaves sycophancy and Kimina's provability
@@ -544,8 +550,8 @@ for name, title in (("prm800k", "PRM800K phase-2 test, raw human ratings"), ("pr
         continue
     P(f"### 10.{list(('prm800k', 'prm800k_claims', 'minif2f', 'minif2f_ext')).index(name) + 1} {title} — {e['n']} rows, {e['n_true']} true\n\n")
     if p:
-        P("Benchmark metrics of the four autoformalizers on this data (our prover pass):\n\n" + tbl(["model", "TPR", "FPR", "FI", "true: Proved / Refuted / Unknown / TC_Fail", "false: Proved / Refuted / TC_Fail"],
-            [[r["model"], f(r["TPR"]), f(r["FPR"]), f(r["FI"]), f"{f(r['true_proved'])} / {f(r['true_refuted'])} / {f(r['true_unknown'])} / {f(r['true_tc_fail'])}", f"{f(r['false_proved'])} / {f(r['false_refuted'])} / {f(r['false_tc_fail'])}"] for r in p["table"]]))
+        P("Benchmark metrics of the four autoformalizers on this data (our prover pass; UFLB = ½FNR + ½FPR + AFFR, lower is better):\n\n" + tbl(["model", "TPR", "FNR", "FPR", "AFFR", "UFLB", "true: Proved / Refuted / Unknown / TC_Fail", "false: Proved / Refuted / TC_Fail"],
+            [[r["model"], f(r["TPR"]), f(r.get("FNR")), f(r["FPR"]), f(r.get("AFFR")), f"**{f(r.get('UFLB'))}**", f"{f(r['true_proved'])} / {f(r['true_refuted'])} / {f(r['true_unknown'])} / {f(r['true_tc_fail'])}", f"{f(r['false_proved'])} / {f(r['false_refuted'])} / {f(r['false_tc_fail'])}"] for r in p["table"]]))
     rows = []
     for m, r in e["models"].items():
         t = r["truth"]
@@ -578,8 +584,8 @@ P("""## 11. Conclusions, caveats, open ends
 2. The `sycophancy` and `proved_strict` probes mostly inherit the truth
    signal; sycophantic *repair* among corrupted steps is only weakly readable
    (0.56–0.69 ≈ text) (§5.2).
-3. The probe is useful as an abstention signal: −20 % coverage buys +0.03–0.04
-   FI and removes 40–54 % of sycophantic cases (§7).
+3. The probe is useful as an abstention signal: −20 % coverage lowers UFLB
+   (see §7 for the exact values) and removes 40–54 % of sycophantic cases.
 4. Causally, the direction moves provability for Kimina (and formalization
    decisiveness for Goedel) and nothing else; sycophancy is not steerable at
    either site, any layer, or by ablation, with MDE ≈ 0.11 (§8).

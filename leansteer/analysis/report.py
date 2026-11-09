@@ -143,17 +143,18 @@ def _abstain_section(run: Run, cfg: dict, lines: list) -> None:
     if not rows:
         return
     lines.append("## Abstention with the pre-generation probe (held-out problems, all step variants)\n")
-    lines.append("TPR = P(Proved | true step), FPR = P(Proved | corrupted step), FI = 2·TPR·(1−FPR)/(TPR+1−FPR). Rows with the lowest scores are "
-                 "dropped; *syc. removed* = share of the sycophantic cases (corrupted & Proved) among the dropped rows' total.\n")
-    lines.append("| model | score | abstain q | coverage | TPR | FPR | **FI** | syc. removed | true removed |")
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("FaithformBench's final metrics (arXiv:2608.10916): FNR = P(Refuted | true step), FPR = P(Proved | corrupted step), AFFR = P(AF_Fail or TC_Fail), "
+                 "**UFLB = ½FNR + ½FPR + AFFR (lower is better)**. Rows with the lowest scores are dropped; *syc. removed* = share of the sycophantic cases "
+                 "(corrupted & Proved) that were dropped.\n")
+    lines.append("| model | score | abstain q | coverage | TPR | FNR | FPR | AFFR | **UFLB** | syc. removed | true removed |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for model, r in rows:
         b = r["base"]
-        lines.append(f"| {model} | (none) | 0 | 1.00 | {_fmt(b['TPR'])} | {_fmt(b['FPR'])} | **{_fmt(b['FI'])}** | – | – |")
+        lines.append(f"| {model} | (none) | 0 | 1.00 | {_fmt(b['TPR'])} | {_fmt(b['FNR'])} | {_fmt(b['FPR'])} | {_fmt(b['AFFR'])} | **{_fmt(b['UFLB'])}** | – | – |")
         for sname, curve in r["curves"].items():
             for c in curve:
                 if c["q"] in (0.1, 0.2, 0.3):
-                    lines.append(f"| {model} | {sname} | {c['q']} | {_fmt(c['coverage'])} | {_fmt(c['TPR'])} | {_fmt(c['FPR'])} | **{_fmt(c['FI'])}** | "
+                    lines.append(f"| {model} | {sname} | {c['q']} | {_fmt(c['coverage'])} | {_fmt(c['TPR'])} | {_fmt(c['FNR'])} | {_fmt(c['FPR'])} | {_fmt(c['AFFR'])} | **{_fmt(c['UFLB'])}** | "
                                  f"{_fmt(c['sycophantic_removed'])} | {_fmt(c['true_removed'])} |")
     lines.append("")
 
@@ -383,10 +384,10 @@ def _external_section(run: Run, cfg: dict, lines: list) -> None:
         if pp.exists():
             p = json.loads(pp.read_text())
             lines.append("Our prover pass over the four models' autoformalizations (DeepSeek-Prover-V2-7B, benchmark protocol):\n")
-            lines.append("| model | TPR | FPR | FI | true: Proved / Refuted / Unknown / TC_Fail / AF_Fail | false: Proved / Refuted / TC_Fail |")
-            lines.append("|---|---|---|---|---|---|")
+            lines.append("| model | TPR | FNR | FPR | AFFR | **UFLB** | true: Proved / Refuted / Unknown / TC_Fail / AF_Fail | false: Proved / Refuted / TC_Fail |")
+            lines.append("|---|---|---|---|---|---|---|---|")
             for r in p["table"]:
-                lines.append(f"| {r['model']} | {_fmt(r['TPR'])} | {_fmt(r['FPR'])} | {_fmt(r['FI'])} | {_fmt(r['true_proved'])} / {_fmt(r['true_refuted'])} / "
+                lines.append(f"| {r['model']} | {_fmt(r['TPR'])} | {_fmt(r.get('FNR'))} | {_fmt(r['FPR'])} | {_fmt(r.get('AFFR'))} | **{_fmt(r.get('UFLB'))}** | {_fmt(r['true_proved'])} / {_fmt(r['true_refuted'])} / "
                              f"{_fmt(r['true_unknown'])} / {_fmt(r['true_tc_fail'])} / {_fmt(r['true_af_fail'])} | {_fmt(r['false_proved'])} / {_fmt(r['false_refuted'])} / {_fmt(r['false_tc_fail'])} |")
             lines.append("")
         lines.append("Truth (true vs false step) from the prompt_last state: FaithformBench directions applied without retraining, a probe retrained "

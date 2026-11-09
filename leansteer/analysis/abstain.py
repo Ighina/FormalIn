@@ -5,12 +5,13 @@ The probe cannot rerank samples (it is read before generation), but it can
 be faithful.  On the held-out problems of each model we compute the benchmark
 metrics over all step variants
 
-    TPR = P(Proved | true step)      FPR = P(Proved | corrupted step)
-    FI  = 2 * TPR * (1 - FPR) / (TPR + (1 - FPR))        (the faithfulness index)
+    FNR = P(Refuted | true step)     FPR = P(Proved | corrupted step)
+    AFFR = P(AF_Fail or TC_Fail)     UFLB = 1/2 FNR + 1/2 FPR + AFFR
 
 and then drop the q lowest-scoring rows under several scores, reporting the
 metrics on the remaining rows, the coverage, and which fraction of the
-sycophantic cases (corrupted & Proved) was removed:
+sycophantic cases (corrupted & Proved) was removed.  The headline metric is the
+paper's UFLB = 1/2 FNR + 1/2 FPR + AFFR (lower is better; see analysis/metrics.py):
 
     sycophancy_dir   the task's direction (+ = true & proved)
     proved_dir       the ``proved`` direction
@@ -29,6 +30,7 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 
+from leansteer.analysis.metrics import faithfulness_metrics
 from leansteer.analysis.probes import load_direction
 from leansteer.data.faithform import PROVED, build_task, load_af, problem_split
 from leansteer.experiment import Run, write_json
@@ -39,11 +41,7 @@ QS = (0.0, 0.05, 0.1, 0.2, 0.3, 0.5)
 
 
 def metrics(df: pd.DataFrame) -> dict:
-    tr, co = df[~df.is_perturbed], df[df.is_perturbed]
-    tpr = float((tr.verdict == PROVED).mean()) if len(tr) else float("nan")
-    fpr = float((co.verdict == PROVED).mean()) if len(co) else float("nan")
-    fi = 2 * tpr * (1 - fpr) / (tpr + (1 - fpr)) if tpr + (1 - fpr) > 0 else float("nan")
-    return {"TPR": tpr, "FPR": fpr, "FI": fi, "n": int(len(df)), "n_true": int(len(tr)), "n_corrupted": int(len(co))}
+    return faithfulness_metrics(df)
 
 
 def run_abstain(cfg: dict, model: str, anchor: str = "prompt_last") -> dict:
@@ -85,7 +83,7 @@ def run_abstain(cfg: dict, model: str, anchor: str = "prompt_last") -> dict:
     d = run.model_dir(model) / "abstain"; d.mkdir(exist_ok=True)
     write_json(d / "results.json", out)
     b = out["base"]
-    log.info("[%s] base TPR %.3f FPR %.3f FI %.3f | abstain 20%% by sycophancy_dir: FI %.3f (syc removed %.2f) | detect_dir: FI %.3f | tfidf: FI %.3f | random: FI %.3f",
-             model, b["TPR"], b["FPR"], b["FI"], out["curves"]["sycophancy_dir"][3]["FI"], out["curves"]["sycophancy_dir"][3]["sycophantic_removed"],
-             out["curves"]["detect_dir"][3]["FI"] if "detect_dir" in out["curves"] else -1, out["curves"]["tfidf_detect"][3]["FI"], out["curves"]["random"][3]["FI"])
+    log.info("[%s] base FNR %.3f FPR %.3f AFFR %.3f UFLB %.3f | abstain 20%% by sycophancy_dir: UFLB %.3f (syc removed %.2f) | detect_dir: %.3f | tfidf: %.3f | random: %.3f",
+             model, b["FNR"], b["FPR"], b["AFFR"], b["UFLB"], out["curves"]["sycophancy_dir"][3]["UFLB"], out["curves"]["sycophancy_dir"][3]["sycophantic_removed"],
+             out["curves"]["detect_dir"][3]["UFLB"] if "detect_dir" in out["curves"] else -1, out["curves"]["tfidf_detect"][3]["UFLB"], out["curves"]["random"][3]["UFLB"])
     return out

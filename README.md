@@ -253,24 +253,26 @@ error, but it is a weak effect.
 The probe is read before generation, so it cannot rerank samples, but it can
 *abstain*: refuse the steps whose state says the formalization will not be
 faithful.  On each model's held-out problems (all 7,860 step variants, the
-benchmark's own verdicts) we drop the q lowest-scoring rows and recompute the
-benchmark's faithfulness index FI = 2·TPR·(1−FPR)/(TPR+1−FPR).  Cells: FI on
-the remaining rows (share of the sycophantic cases, corrupted & Proved, that
-were removed).
+benchmark's own verdicts) we drop the q lowest-scoring rows and recompute
+FaithformBench's final metric, the unfaithfulness lower bound
+**UFLB = ½·FNR + ½·FPR + AFFR** (FNR = true steps refuted, FPR = corrupted
+steps proved, AFFR = steps with no usable output, i.e. AF-fail or type-check
+failure; arXiv:2608.10916; lower is better).  Cells: UFLB on the remaining
+rows (share of the sycophantic cases, corrupted & Proved, that were removed).
 
 | model | no abstention | sycophancy dir, q = 0.2 | sycophancy dir, q = 0.3 | proved dir, q = 0.2 | corruption detector, q = 0.2 | TF-IDF text detector, q = 0.2 | random, q = 0.2 |
 |---|---|---|---|---|---|---|---|
-| goedel | 0.750 (TPR 0.73, FPR 0.23) | 0.782 (46%) | 0.803 (64%) | 0.771 (35%) | 0.754 (36%) | 0.745 (21%) | 0.752 (22%) |
-| stepfun | 0.664 (TPR 0.56, FPR 0.19) | 0.702 (54%) | 0.725 (75%) | 0.690 (28%) | 0.673 (39%) | 0.656 (23%) | 0.661 (21%) |
-| kimina | 0.559 (TPR 0.42, FPR 0.17) | 0.599 (42%) | 0.623 (69%) | 0.595 (19%) | 0.562 (35%) | 0.549 (22%) | 0.555 (21%) |
-| herald | 0.532 (TPR 0.39, FPR 0.17) | 0.568 (40%) | 0.593 (71%) | 0.566 (19%) | 0.540 (32%) | 0.532 (24%) | 0.534 (21%) |
+| goedel | 0.197 (FNR 0.04, FPR 0.23, AFFR 0.06) | 0.166 (46%) | 0.146 (64%) | 0.180 (35%) | 0.195 (36%) | 0.204 (21%) | 0.195 (22%) |
+| stepfun | 0.316 (FNR 0.10, FPR 0.19, AFFR 0.17) | 0.276 (54%) | 0.252 (75%) | 0.290 (28%) | 0.304 (39%) | 0.323 (23%) | 0.315 (21%) |
+| kimina | 0.408 (FNR 0.14, FPR 0.17, AFFR 0.25) | 0.382 (42%) | 0.354 (69%) | 0.385 (19%) | 0.406 (35%) | 0.416 (22%) | 0.410 (21%) |
+| herald | 0.484 (FNR 0.15, FPR 0.17, AFFR 0.33) | 0.454 (40%) | 0.426 (71%) | 0.457 (19%) | 0.477 (32%) | 0.483 (24%) | 0.483 (21%) |
 
-Abstaining on the 20 % of steps the sycophancy direction scores lowest raises
-FI by 0.03–0.04 for every model and removes 40–54 % of the sycophantic cases
-(random: 21 %; a text-based corruption detector: 21–24 %, with no FI gain);
-at 30 % the gain is 0.05–0.06 with 64–75 % of sycophantic cases removed.  The
-gain comes almost entirely from the FPR side (sycophantic formalizations are
-what gets refused) while TPR rises slightly.
+Abstaining on the 20 % of steps the sycophancy direction scores lowest lowers
+UFLB by 0.026–0.040 for every model and removes 40–54 % of the sycophantic
+cases (random: 21 %, UFLB unchanged; a text-based corruption detector: 21–24 %,
+UFLB unchanged or slightly worse); at 30 % the reduction is 0.051–0.064 with
+64–75 % of sycophantic cases removed.  The reduction comes from the FPR term
+(sycophantic formalizations are what gets refused); FNR and AFFR are flat.
 
 ### Attention-head probes vs residual-stream probes (`collect-heads` / `probe-heads`; prompt_last anchor)
 
@@ -566,23 +568,29 @@ mean or the negative-class mean (`ablate`), with a random direction as
 control.
 
 The one-number summary for the sycophancy task is whether any condition
-raises the benchmark's faithfulness index on the evaluation rows (true steps
-proved more, corrupted steps proved less).  Best ΔFI over the family's
-conditions (cells with ≥ 100 steps) / best ΔFI of the matching random control:
+lowers the benchmark's UFLB on the evaluation rows (true steps refuted less,
+corrupted steps proved less, fewer AF/type-check failures).  Largest UFLB
+*decrease* (ΔUFLB, negative = more faithful) over the family's conditions
+(cells with ≥ 100 steps) / the same for the matching random control:
 
 | family | goedel | stepfun | kimina | herald |
 |---|---|---|---|---|
-| residual (steer) | +0.011 (dm +4) / +0.000 | +0.020 (dm -4) / -0.008 | +0.002 (dm -8) / -0.009 | +0.051 (dm +8) / +0.047 |
-| heads top-16 | +0.014 (dm -8) / -0.007 | +0.014 (dm -8) / +0.015 | +0.006 (dm +8) / +0.013 | +0.050 (dm +8) / -0.034 |
-| layer_sweep | +0.004 (dm_L27 +8) / +0.050 | +0.026 (dm_L28 -8) / +0.048 | +0.004 (dm_L14 -8) / -0.013 | +0.078 (dm_L16 +8) / +0.057 |
-| multi_layer | -0.695 (dm_multi -4) / -0.118 | -0.013 (dm_multi -4) / +0.006 | -0.021 (dm_multi +4) / -0.013 | -0.562 (dm_multi -4) / +0.016 |
-| cot_only | +0.001 (dm_L24 -8) / +0.032 | +0.023 (dm_L28 -8) / -0.008 | -0.011 (dm_L28 -8) / -0.037 | +0.078 (dm_L16 +8) / +0.064 |
-| heads_sigma | -0.007 (dm_hsig +15) / -0.088 | -0.012 (dm_hsig +15) / +0.028 | +0.012 (dm_hsig +15) / -0.004 | -0.078 (dm_hsig +15) / -0.184 |
-| ablate | +0.022 (project_pos_mean +1) / – | +0.002 (project_mean +1) / – | -0.003 (project_random +1) / – | +0.023 (project_neg_mean +1) / – |
+| residual (steer) | -0.007 / -0.002 | -0.030 / -0.025 | -0.015 / +0.008 | -0.048 / -0.042 |
+| heads top-16 | -0.007 / +0.006 | -0.044 / -0.024 | -0.015 / -0.008 | -0.075 / +0.049 |
+| layer_sweep | -0.014 / -0.027 | -0.057 / -0.074 | -0.022 / +0.005 | -0.091 / -0.085 |
+| multi_layer | +0.726 / +0.356 | -0.057 / -0.064 | +0.082 / -0.002 | +0.549 / +0.032 |
+| cot_only | +0.036 / -0.027 | -0.054 / -0.041 | -0.012 / +0.035 | -0.071 / -0.008 |
+| heads_sigma | +0.206 / +0.273 | -0.034 / -0.051 | -0.002 / +0.105 | +0.005 / +0.202 |
+| ablate | -0.037 / -0.007 | +0.089 / -0.024 | +0.028 / +0.002 | -0.048 / -0.018 |
 
-* **No intervention raises FI beyond its random control.** The largest
-  gains (+0.05 to +0.08, Herald) are matched by random directions of the
-  same magnitude (+0.05 to +0.06); the thinking models never exceed +0.03.
+* **No intervention lowers UFLB beyond its random control at a matched
+  magnitude.** The thinking models' best decreases are ≤ 0.03 except
+  StepFun's layer sweep (−0.057), where the random control does better
+  (−0.074).  Herald's head steering shows −0.075 at α = −8, but the head
+  experiment has random controls only at ±32, where steering is far *worse*
+  than random (UFLB 0.89 vs 0.50 at −32, outputs collapse); the −8 gain comes
+  from fewer type-check failures (0.25 → 0.19 on corrupted steps) and a 0.04
+  drop in corrupted-proved, not from a selective anti-sycophancy effect.
   Where a single number moved "the right way" (e.g. Goedel at layer 18, −α
   lowers the proved rate of corrupted steps 0.38 → 0.23), the same
   intervention lowers the proved rate of true steps as much (0.79 → 0.59):
@@ -616,14 +624,14 @@ class.
 
 800 true (+1) and 800 false (−1) rated completions over 210 problems, mathematical statements only (digit/operator/LaTeX, 15–300 characters, no answer lines); the label is the human rating, so a *false* step is one a labeler marked incorrect — this includes steps that are wrong in strategy rather than false propositions.
 
-Benchmark metrics of the four autoformalizers on this data (our prover pass, benchmark protocol):
+Benchmark metrics of the four autoformalizers on this data (our prover pass, benchmark protocol; UFLB = ½FNR + ½FPR + AFFR, lower is better):
 
-| model | TPR | FPR | FI |
-|---|---|---|---|
-| goedel | 0.61 | 0.45 | 0.58 |
-| kimina | 0.34 | 0.23 | 0.47 |
-| herald | 0.35 | 0.28 | 0.47 |
-| stepfun | 0.41 | 0.28 | 0.52 |
+| model | TPR | FNR | FPR | AFFR | UFLB |
+|---|---|---|---|---|---|
+| goedel | 0.61 | 0.09 | 0.45 | 0.07 | **0.34** |
+| kimina | 0.34 | 0.19 | 0.23 | 0.22 | **0.42** |
+| herald | 0.35 | 0.14 | 0.28 | 0.28 | **0.48** |
+| stepfun | 0.41 | 0.12 | 0.28 | 0.20 | **0.40** |
 
 Truth (true vs false step) from the prompt_last state — FaithformBench directions applied *without retraining*, a probe retrained on this data (5-fold problem-grouped CV at the benchmark's layer), the best layer of a CV sweep (optimistic), and TF-IDF text (CV):
 
@@ -651,14 +659,14 @@ Verdict tasks defined on our prover's verdicts (bench direction / retrained CV /
 
 488 informal statements and 486 LLM corruptions (Gemma-3-12B-it, the benchmark's own 'mathematical adversary' prompt; median edit similarity 0.99, 15 rewrites); each statement is a full competition problem, not an atomic step.
 
-Benchmark metrics of the four autoformalizers on this data (our prover pass, benchmark protocol):
+Benchmark metrics of the four autoformalizers on this data (our prover pass, benchmark protocol; UFLB = ½FNR + ½FPR + AFFR, lower is better):
 
-| model | TPR | FPR | FI |
-|---|---|---|---|
-| goedel | 0.51 | 0.10 | 0.65 |
-| kimina | 0.43 | 0.09 | 0.58 |
-| herald | 0.36 | 0.12 | 0.51 |
-| stepfun | 0.42 | 0.07 | 0.57 |
+| model | TPR | FNR | FPR | AFFR | UFLB |
+|---|---|---|---|---|---|
+| goedel | 0.64 | 0.07 | 0.38 | 0.07 | **0.30** |
+| kimina | 0.35 | 0.18 | 0.19 | 0.20 | **0.38** |
+| herald | 0.36 | 0.14 | 0.22 | 0.27 | **0.45** |
+| stepfun | 0.46 | 0.12 | 0.24 | 0.20 | **0.38** |
 
 Truth (true vs false step) from the prompt_last state — FaithformBench directions applied *without retraining*, a probe retrained on this data (5-fold problem-grouped CV at the benchmark's layer), the best layer of a CV sweep (optimistic), and TF-IDF text (CV):
 
@@ -693,12 +701,12 @@ TRUE_CLAIM (337 FALSE_CLAIM, 169 NO_CLAIM).  The refined set keeps only
 steps where rating and judge agree: 800 true (+1 & TRUE_CLAIM) and 800 false
 (−1 & FALSE_CLAIM).
 
-| model | TPR | FPR | FI |
-|---|---|---|---|
-| goedel | 0.64 | 0.38 | 0.63 |
-| kimina | 0.35 | 0.19 | 0.49 |
-| herald | 0.36 | 0.22 | 0.49 |
-| stepfun | 0.46 | 0.24 | 0.57 |
+| model | TPR | FNR | FPR | AFFR | UFLB |
+|---|---|---|---|---|---|
+| goedel | 0.51 | 0.03 | 0.10 | 0.10 | **0.16** |
+| kimina | 0.43 | 0.04 | 0.09 | 0.16 | **0.23** |
+| herald | 0.36 | 0.07 | 0.12 | 0.20 | **0.29** |
+| stepfun | 0.42 | 0.02 | 0.07 | 0.18 | **0.23** |
 
 | model | corruption-detector dir | proved_strict dir | retrained CV | best-layer CV | TF-IDF CV |
 |---|---|---|---|---|---|
@@ -733,12 +741,12 @@ semantics.
 filtered to statement-like text), 1,970 corruptions with the same adversary
 prompt; 3,958 rows, 12,876 prover statements.
 
-| model | TPR | FPR | FI |
-|---|---|---|---|
-| goedel | 0.35 | 0.14 | 0.49 |
-| kimina | 0.28 | 0.10 | 0.43 |
-| herald | 0.31 | 0.15 | 0.46 |
-| stepfun | 0.27 | 0.10 | 0.41 |
+| model | TPR | FNR | FPR | AFFR | UFLB |
+|---|---|---|---|---|---|
+| goedel | 0.35 | 0.04 | 0.14 | 0.08 | **0.17** |
+| kimina | 0.28 | 0.06 | 0.10 | 0.14 | **0.22** |
+| herald | 0.31 | 0.08 | 0.15 | 0.14 | **0.26** |
+| stepfun | 0.27 | 0.06 | 0.10 | 0.18 | **0.26** |
 
 | model | corruption-detector dir | proved_strict dir | retrained CV | best-layer CV | TF-IDF CV |
 |---|---|---|---|---|---|
@@ -789,14 +797,14 @@ distribution, but the signal it finds is the same kind, at the same layers.
   little beyond text here.  On the verdict side, retrained probes beat text
   on `proved_strict` by 0.05–0.11 (0.72–0.77 vs 0.62–0.66) and Goedel's
   benchmark direction transfers to it (0.72).  The models prove PRM800K's
-  false steps 23–45 % of the time (FI 0.47–0.58): PRM800K's −1 label marks
+  false steps 23–45 % of the time (UFLB 0.34–0.49): PRM800K's −1 label marks
   reasoning the labeler rejected, not necessarily a false proposition, so
   part of this "sycophancy" is label semantics.
 * **miniF2F.** With the benchmark's own corruption recipe on full competition
   problems, the corruption is barely readable anywhere: FaithformBench
   directions 0.50–0.57, retrained probes 0.59–0.62 at any layer, text 0.55.
   The autoformalizers are also much more faithful here (FPR 0.07–0.12,
-  FI 0.51–0.65 vs 0.53–0.75 on the benchmark): a one-number change in a
+  UFLB 0.16–0.29): a one-number change in a
   long problem statement is formalized literally and refuted, so there is
   less sycophancy to read.  With 486 corruptions the CV AUROCs carry
   ≈ ±0.04 of noise.

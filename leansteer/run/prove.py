@@ -455,7 +455,7 @@ def score_prove(cfg: dict, which: str = "steer") -> Path:
 
 def score_external(cfg: dict, name: str) -> Path:
     """Per-model verdicts of the external dataset's autoformalizations and the
-    benchmark metrics (TPR, FPR, FI) by truth label."""
+    benchmark metrics (TPR, FNR, FPR, AFFR, UFLB) by truth label."""
     run = Run(cfg)
     d = prover_dir(run, f"ext_{name}", cfg["prove"].get("prover", "deepseek"))
     verified = json.loads((d / "verified.json").read_text())
@@ -467,15 +467,18 @@ def score_external(cfg: dict, name: str) -> Path:
         verdict = v["verdict"] if v else "AF_Fail"
         verdicts[f"{g['model']}|{g['uid']}"] = verdict
         by[(g["model"], int(g["truth"]))].append(verdict)
+    from leansteer.analysis.metrics import uflb_from_rates
     for model in cfg["models"]:
         t, f = by.get((model, 1), []), by.get((model, 0), [])
         if not t:
             continue
-        tpr = float(np.mean([v == "Proved" for v in t])); fpr = float(np.mean([v == "Proved" for v in f])) if f else float("nan")
-        fi = 2 * tpr * (1 - fpr) / (tpr + (1 - fpr)) if f and tpr + (1 - fpr) > 0 else float("nan")
-        table.append({"model": model, "n_true": len(t), "n_false": len(f), "TPR": tpr, "FPR": fpr, "FI": fi,
-                      **{f"true_{k.lower()}": float(np.mean([v == k for v in t])) for k in ("Proved", "Refuted", "Unknown", "TC_Fail", "AF_Fail")},
-                      **{f"false_{k.lower()}": (float(np.mean([v == k for v in f])) if f else None) for k in ("Proved", "Refuted", "Unknown", "TC_Fail", "AF_Fail")}})
+        rate = lambda vs, k: float(np.mean([v == k for v in vs])) if vs else float("nan")
+        tpr, fnr = rate(t, "Proved"), rate(t, "Refuted"); fpr = rate(f, "Proved")
+        af_t = float(np.mean([v in ("AF_Fail", "TC_Fail") for v in t])); af_f = float(np.mean([v in ("AF_Fail", "TC_Fail") for v in f])) if f else float("nan")
+        uflb = uflb_from_rates(fnr, fpr, af_t, af_f) if f else float("nan")
+        table.append({"model": model, "n_true": len(t), "n_false": len(f), "TPR": tpr, "FNR": fnr, "FPR": fpr, "AFFR": 0.5 * (af_t + af_f) if f else af_t, "UFLB": uflb,
+                      **{f"true_{k.lower()}": rate(t, k) for k in ("Proved", "Refuted", "Unknown", "TC_Fail", "AF_Fail")},
+                      **{f"false_{k.lower()}": (rate(f, k) if f else None) for k in ("Proved", "Refuted", "Unknown", "TC_Fail", "AF_Fail")}})
     out = {"dataset": name, "n_statements": len(verified), "table": table}
     write_json(d / "results.json", out)
     write_json(run.root / f"ext_{name}" / "verdicts.json", verdicts)

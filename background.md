@@ -439,19 +439,19 @@ mid-network and stay at the text/difficulty baselines.
 ## 7. Abstention: the applied use of the probe
 
 **TL;DR.** Refusing the 20 % of steps the sycophancy direction scores lowest
-raises the benchmark's faithfulness index by 0.03–0.04 for every model and
-removes 40–54 % of sycophantic cases (random 21 %, a text corruption detector
-21–24 % with no gain).
+lowers the benchmark's UFLB (unfaithfulness lower bound, lower is better) for
+every model and removes 40–54 % of sycophantic cases (random 21 %, a text
+corruption detector 21–24 %).
 
 
 | model | no abstention | sycophancy dir q=0.2 | sycophancy dir q=0.3 | proved dir q=0.2 | corruption detector q=0.2 | TF-IDF detector q=0.2 | random q=0.2 |
 |---|---|---|---|---|---|---|---|
-| goedel | 0.750 (TPR 0.73, FPR 0.23) | 0.782 (46%) | 0.803 (64%) | 0.771 (35%) | 0.754 (36%) | 0.745 (21%) | 0.752 (22%) |
-| stepfun | 0.664 (TPR 0.56, FPR 0.19) | 0.702 (54%) | 0.725 (75%) | 0.690 (28%) | 0.673 (39%) | 0.656 (23%) | 0.661 (21%) |
-| kimina | 0.559 (TPR 0.42, FPR 0.17) | 0.599 (42%) | 0.623 (69%) | 0.595 (19%) | 0.562 (35%) | 0.549 (22%) | 0.555 (21%) |
-| herald | 0.532 (TPR 0.39, FPR 0.17) | 0.568 (40%) | 0.593 (71%) | 0.566 (19%) | 0.540 (32%) | 0.532 (24%) | 0.534 (21%) |
+| goedel | 0.197 (FNR 0.04, FPR 0.23, AFFR 0.06) | 0.166 (46%) | 0.146 (64%) | 0.180 (35%) | 0.195 (36%) | 0.204 (21%) | 0.195 (22%) |
+| stepfun | 0.316 (FNR 0.10, FPR 0.19, AFFR 0.17) | 0.276 (54%) | 0.252 (75%) | 0.290 (28%) | 0.304 (39%) | 0.323 (23%) | 0.315 (21%) |
+| kimina | 0.408 (FNR 0.14, FPR 0.17, AFFR 0.25) | 0.382 (42%) | 0.354 (69%) | 0.385 (19%) | 0.406 (35%) | 0.416 (22%) | 0.410 (21%) |
+| herald | 0.484 (FNR 0.15, FPR 0.17, AFFR 0.33) | 0.454 (40%) | 0.426 (71%) | 0.457 (19%) | 0.477 (32%) | 0.483 (24%) | 0.483 (21%) |
 
-Cells: FI on the remaining held-out rows (share of sycophantic cases removed). FI = 2·TPR·(1−FPR)/(TPR+1−FPR) over all step variants of the held-out problems, using the benchmark's own verdicts.
+Cells: UFLB on the remaining held-out rows (share of sycophantic cases removed). UFLB = ½FNR + ½FPR + AFFR over all step variants of the held-out problems, using the benchmark's own verdicts (FaithformBench final metric, arXiv:2608.10916; lower is better).
 
 
 - **file:** `<model>/abstain/results.json` (curves for q ∈ {0, .05, .1, .2, .3, .5})
@@ -467,8 +467,8 @@ random direction flat) and changes how decisively Goedel formalizes false
 steps; it does nothing to sycophancy in any model (300 steps per class,
 minimal detectable effect ≈ 0.11). Head steering, other layers, multi-layer,
 chain-of-thought-only, ITI σ-scaled heads and projection ablation do not
-change that: no intervention raises the faithfulness index on the sycophancy
-rows beyond its random control.
+change that: no intervention lowers UFLB on the sycophancy rows beyond its
+random control.
 
 ### 8.1 Protocol
 
@@ -769,27 +769,31 @@ rows beyond its random control.
 - **code:** `run/variants.py::run_steer_variant`; variant specs in `configs/default.yaml::variants`
 - **recompute:** `steer-variant --variant <v>` → `prove-variant-gen --variant <v>` → `prove-variant-verify --variant <v>`
 
-### 8.5 One-number summary: does any intervention raise the faithfulness index on the sycophancy rows?
+### 8.5 One-number summary: does any intervention lower UFLB on the sycophancy rows?
 
 
 | intervention family | goedel | stepfun | kimina | herald |
 |---|---|---|---|---|
-| residual (steer) | +0.011 / +0.000 | +0.020 / -0.008 | +0.002 / -0.009 | +0.051 / +0.047 |
-| heads top-16 | +0.014 / -0.007 | +0.014 / +0.015 | +0.006 / +0.013 | +0.050 / -0.034 |
-| layer_sweep | +0.004 / +0.050 | +0.026 / +0.048 | +0.004 / -0.013 | +0.078 / +0.057 |
-| multi_layer | -0.695 / -0.118 | -0.013 / +0.006 | -0.021 / -0.013 | -0.562 / +0.016 |
-| cot_only | +0.001 / +0.032 | +0.023 / -0.008 | -0.011 / -0.037 | +0.078 / +0.064 |
-| heads_sigma | -0.007 / -0.088 | -0.012 / +0.028 | +0.012 / -0.004 | -0.078 / -0.184 |
-| ablate | +0.022 / +0.021 | +0.002 / -0.024 | -0.019 / -0.003 | +0.023 / +0.001 |
+| residual (steer) | -0.007 / -0.002 | -0.030 / -0.025 | -0.015 / +0.008 | -0.048 / -0.042 |
+| heads top-16 | -0.007 / +0.006 | -0.044 / -0.024 | -0.015 / -0.008 | -0.075 / +0.049 |
+| layer_sweep | -0.014 / -0.027 | -0.057 / -0.074 | -0.022 / +0.005 | -0.091 / -0.085 |
+| multi_layer | +0.726 / +0.356 | -0.057 / -0.064 | +0.082 / -0.002 | +0.549 / +0.032 |
+| cot_only | +0.036 / -0.027 | -0.054 / -0.041 | -0.012 / +0.035 | -0.071 / -0.008 |
+| heads_sigma | +0.206 / +0.273 | -0.034 / -0.051 | -0.002 / +0.105 | +0.005 / +0.202 |
+| ablate | -0.037 / -0.007 | +0.089 / -0.024 | +0.028 / +0.002 | -0.048 / -0.018 |
 
-Cells: best ΔFI over the family's non-random conditions / best ΔFI of its random control (cells with ≥ 100 steps; FI from the per-cell proved rates in `results.json::table`).
+Cells: largest UFLB *decrease* (ΔUFLB, negative = more faithful) over the family's non-random conditions / the same for its random control (cells with ≥ 100 steps; UFLB from the per-cell Proved/Refuted/TC_Fail/AF_Fail rates in `results.json::table`).
 
 
 - **files:** `prove*/results.json::table`
 - **code:** this script, `build_background.py` (same arithmetic as the README section)
 
-_Interpretation (human):_ no family beats its random control (thinking
-models ≤ +0.03; Herald's +0.05–0.08 matched by random). Numbers that look
+_Interpretation (human):_ no family lowers UFLB beyond its random control at a
+matched magnitude. The thinking models' best decreases are ≤ 0.03 except
+StepFun's layer sweep (−0.057), where random does better (−0.074); Herald's
+head steering shows −0.075 at α = −8, but the head family has random controls
+only at ±32, where steering is far worse than random (outputs collapse), and
+the −8 gain is mostly fewer type-check failures. Numbers that look
 anti-sycophantic at a single layer come with an equal drop on true steps.
 Multi-layer steering at α ±4 destroys the thinking models' outputs where random
 directions do not; ablation leaves sycophancy and Kimina's provability
@@ -846,14 +850,14 @@ refitted; label quality and statement granularity set the gap over text.
 ### 10.1 PRM800K phase-2 test, raw human ratings — 1600 rows, 800 true
 
 
-Benchmark metrics of the four autoformalizers on this data (our prover pass):
+Benchmark metrics of the four autoformalizers on this data (our prover pass; UFLB = ½FNR + ½FPR + AFFR, lower is better):
 
-| model | TPR | FPR | FI | true: Proved / Refuted / Unknown / TC_Fail | false: Proved / Refuted / TC_Fail |
-|---|---|---|---|---|---|
-| goedel | 0.61 | 0.45 | 0.58 | 0.61 / 0.09 / 0.22 / 0.08 | 0.45 / 0.20 / 0.05 |
-| kimina | 0.34 | 0.23 | 0.47 | 0.34 / 0.19 / 0.26 / 0.21 | 0.23 / 0.26 / 0.22 |
-| herald | 0.35 | 0.28 | 0.47 | 0.35 / 0.14 / 0.21 / 0.24 | 0.28 / 0.19 / 0.21 |
-| stepfun | 0.41 | 0.28 | 0.52 | 0.41 / 0.12 / 0.26 / 0.20 | 0.28 / 0.22 / 0.16 |
+| model | TPR | FNR | FPR | AFFR | UFLB | true: Proved / Refuted / Unknown / TC_Fail | false: Proved / Refuted / TC_Fail |
+|---|---|---|---|---|---|---|---|
+| goedel | 0.61 | 0.09 | 0.45 | 0.07 | **0.34** | 0.61 / 0.09 / 0.22 / 0.08 | 0.45 / 0.20 / 0.05 |
+| kimina | 0.34 | 0.19 | 0.23 | 0.22 | **0.42** | 0.34 / 0.19 / 0.26 / 0.21 | 0.23 / 0.26 / 0.22 |
+| herald | 0.35 | 0.14 | 0.28 | 0.28 | **0.48** | 0.35 / 0.14 / 0.21 / 0.24 | 0.28 / 0.19 / 0.21 |
+| stepfun | 0.41 | 0.12 | 0.28 | 0.20 | **0.40** | 0.41 / 0.12 / 0.26 / 0.20 | 0.28 / 0.22 / 0.16 |
 
 Truth (true vs false step) from the prompt_last state:
 
@@ -888,14 +892,14 @@ Verdict tasks on our prover's verdicts:
 ### 10.2 PRM800K restricted to claim-level steps (LLM judge) — 1600 rows, 800 true
 
 
-Benchmark metrics of the four autoformalizers on this data (our prover pass):
+Benchmark metrics of the four autoformalizers on this data (our prover pass; UFLB = ½FNR + ½FPR + AFFR, lower is better):
 
-| model | TPR | FPR | FI | true: Proved / Refuted / Unknown / TC_Fail | false: Proved / Refuted / TC_Fail |
-|---|---|---|---|---|---|
-| goedel | 0.64 | 0.38 | 0.63 | 0.64 / 0.07 / 0.21 / 0.07 | 0.38 / 0.23 / 0.07 |
-| kimina | 0.35 | 0.19 | 0.49 | 0.35 / 0.18 / 0.27 / 0.20 | 0.19 / 0.29 / 0.18 |
-| herald | 0.36 | 0.22 | 0.49 | 0.36 / 0.14 / 0.21 / 0.25 | 0.22 / 0.26 / 0.20 |
-| stepfun | 0.46 | 0.24 | 0.57 | 0.46 / 0.12 / 0.24 / 0.15 | 0.24 / 0.24 / 0.18 |
+| model | TPR | FNR | FPR | AFFR | UFLB | true: Proved / Refuted / Unknown / TC_Fail | false: Proved / Refuted / TC_Fail |
+|---|---|---|---|---|---|---|---|
+| goedel | 0.64 | 0.07 | 0.38 | 0.07 | **0.30** | 0.64 / 0.07 / 0.21 / 0.07 | 0.38 / 0.23 / 0.07 |
+| kimina | 0.35 | 0.18 | 0.19 | 0.20 | **0.38** | 0.35 / 0.18 / 0.27 / 0.20 | 0.19 / 0.29 / 0.18 |
+| herald | 0.36 | 0.14 | 0.22 | 0.27 | **0.45** | 0.36 / 0.14 / 0.21 / 0.25 | 0.22 / 0.26 / 0.20 |
+| stepfun | 0.46 | 0.12 | 0.24 | 0.20 | **0.38** | 0.46 / 0.12 / 0.24 / 0.15 | 0.24 / 0.24 / 0.18 |
 
 Truth (true vs false step) from the prompt_last state:
 
@@ -930,14 +934,14 @@ Verdict tasks on our prover's verdicts:
 ### 10.3 miniF2F (488) + adversary-prompt corruptions — 974 rows, 488 true
 
 
-Benchmark metrics of the four autoformalizers on this data (our prover pass):
+Benchmark metrics of the four autoformalizers on this data (our prover pass; UFLB = ½FNR + ½FPR + AFFR, lower is better):
 
-| model | TPR | FPR | FI | true: Proved / Refuted / Unknown / TC_Fail | false: Proved / Refuted / TC_Fail |
-|---|---|---|---|---|---|
-| goedel | 0.51 | 0.10 | 0.65 | 0.51 / 0.03 / 0.36 / 0.10 | 0.10 / 0.39 / 0.09 |
-| kimina | 0.43 | 0.09 | 0.58 | 0.43 / 0.04 / 0.37 / 0.17 | 0.09 / 0.32 / 0.16 |
-| herald | 0.36 | 0.12 | 0.51 | 0.36 / 0.07 / 0.38 / 0.18 | 0.12 / 0.32 / 0.18 |
-| stepfun | 0.42 | 0.07 | 0.57 | 0.42 / 0.02 / 0.37 / 0.17 | 0.07 / 0.34 / 0.16 |
+| model | TPR | FNR | FPR | AFFR | UFLB | true: Proved / Refuted / Unknown / TC_Fail | false: Proved / Refuted / TC_Fail |
+|---|---|---|---|---|---|---|---|
+| goedel | 0.51 | 0.03 | 0.10 | 0.10 | **0.16** | 0.51 / 0.03 / 0.36 / 0.10 | 0.10 / 0.39 / 0.09 |
+| kimina | 0.43 | 0.04 | 0.09 | 0.16 | **0.23** | 0.43 / 0.04 / 0.37 / 0.17 | 0.09 / 0.32 / 0.16 |
+| herald | 0.36 | 0.07 | 0.12 | 0.20 | **0.29** | 0.36 / 0.07 / 0.38 / 0.18 | 0.12 / 0.32 / 0.18 |
+| stepfun | 0.42 | 0.02 | 0.07 | 0.18 | **0.23** | 0.42 / 0.02 / 0.37 / 0.17 | 0.07 / 0.34 / 0.16 |
 
 Truth (true vs false step) from the prompt_last state:
 
@@ -972,14 +976,14 @@ Verdict tasks on our prover's verdicts:
 ### 10.4 miniF2F + 1,500 Lean-Workbook statements, corrupted — 3958 rows, 1988 true
 
 
-Benchmark metrics of the four autoformalizers on this data (our prover pass):
+Benchmark metrics of the four autoformalizers on this data (our prover pass; UFLB = ½FNR + ½FPR + AFFR, lower is better):
 
-| model | TPR | FPR | FI | true: Proved / Refuted / Unknown / TC_Fail | false: Proved / Refuted / TC_Fail |
-|---|---|---|---|---|---|
-| goedel | 0.35 | 0.14 | 0.49 | 0.35 / 0.04 / 0.54 / 0.07 | 0.14 / 0.33 / 0.08 |
-| kimina | 0.28 | 0.10 | 0.43 | 0.28 / 0.06 / 0.51 / 0.14 | 0.10 / 0.32 / 0.14 |
-| herald | 0.31 | 0.15 | 0.46 | 0.31 / 0.08 / 0.47 / 0.13 | 0.15 / 0.31 / 0.14 |
-| stepfun | 0.27 | 0.10 | 0.41 | 0.27 / 0.06 / 0.49 / 0.14 | 0.10 / 0.33 / 0.14 |
+| model | TPR | FNR | FPR | AFFR | UFLB | true: Proved / Refuted / Unknown / TC_Fail | false: Proved / Refuted / TC_Fail |
+|---|---|---|---|---|---|---|---|
+| goedel | 0.35 | 0.04 | 0.14 | 0.08 | **0.17** | 0.35 / 0.04 / 0.54 / 0.07 | 0.14 / 0.33 / 0.08 |
+| kimina | 0.28 | 0.06 | 0.10 | 0.14 | **0.22** | 0.28 / 0.06 / 0.51 / 0.14 | 0.10 / 0.32 / 0.14 |
+| herald | 0.31 | 0.08 | 0.15 | 0.14 | **0.26** | 0.31 / 0.08 / 0.47 / 0.13 | 0.15 / 0.31 / 0.14 |
+| stepfun | 0.27 | 0.06 | 0.10 | 0.18 | **0.26** | 0.27 / 0.06 / 0.49 / 0.14 | 0.10 / 0.33 / 0.14 |
 
 Truth (true vs false step) from the prompt_last state:
 
@@ -1029,8 +1033,8 @@ Verdict tasks on our prover's verdicts:
 2. The `sycophancy` and `proved_strict` probes mostly inherit the truth
    signal; sycophantic *repair* among corrupted steps is only weakly readable
    (0.56–0.69 ≈ text) (§5.2).
-3. The probe is useful as an abstention signal: −20 % coverage buys +0.03–0.04
-   FI and removes 40–54 % of sycophantic cases (§7).
+3. The probe is useful as an abstention signal: −20 % coverage lowers UFLB
+   (see §7 for the exact values) and removes 40–54 % of sycophantic cases.
 4. Causally, the direction moves provability for Kimina (and formalization
    decisiveness for Goedel) and nothing else; sycophancy is not steerable at
    either site, any layer, or by ablation, with MDE ≈ 0.11 (§8).
