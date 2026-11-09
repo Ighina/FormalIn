@@ -36,9 +36,11 @@ def probes_section(base: Path, ctx: Path, model: str, lines: list, store="probes
     sb, sc = _load(base / model / store / "summary.json"), _load(ctx / model / store / "summary.json")
     if not sb or not sc:
         return False
-    title = "Pre-generation probes" if store == "probes" else "Teacher-forced probes"
+    tf = store != "probes"
+    title = "Teacher-forced probes" if tf else "Pre-generation probes"
+    extra = "TF-IDF step+output (no ctx / ctx)" if tf else "TF-IDF step+context"
     lines += [f"### {title} (test AUROC, validation-selected layer)", "",
-              "| anchor | task | no context | context | Δ | layer (no ctx → ctx) | TF-IDF step | TF-IDF step+context |",
+              f"| anchor | task | no context | context | Δ | layer (no ctx → ctx) | TF-IDF step | {extra} |",
               "|---|---|---|---|---|---|---|---|"]
     for a in anchors:
         for t in tasks:
@@ -48,7 +50,8 @@ def probes_section(base: Path, ctx: Path, model: str, lines: list, store="probes
             bb, bc = kb["baselines"], kc["baselines"]
             lines.append(f"| {a} | {t} | {_f(kb['selected']['test_auc'])} | {_f(kc['selected']['test_auc'])} | "
                          f"{_delta(kb['selected']['test_auc'], kc['selected']['test_auc'])} | L{kb['selected_layer']} → L{kc['selected_layer']} | "
-                         f"{_f(bc.get('tfidf_auc'))} | {_f(bc.get('tfidf_context_auc', bc.get('tfidf_output_auc')))} |")
+                         f"{_f(bc.get('tfidf_auc'))} | "
+                         f"{(_f(bb.get('tfidf_output_auc')) + ' / ' + _f(bc.get('tfidf_output_auc'))) if tf else _f(bc.get('tfidf_context_auc'))} |")
     lines.append("")
     return True
 
@@ -97,6 +100,26 @@ def abstain_section(base: Path, ctx: Path, model: str, lines: list):
         pb = min(ab["curves"][g], key=lambda r: abs(r["q"] - 0.2))
         pc = min(ac["curves"][g], key=lambda r: abs(r["q"] - 0.2))
         lines.append(f"| {g} | {_f(pb['UFLB'])} ({_f(pb['sycophantic_removed'], 2)}) | {_f(pc['UFLB'])} ({_f(pc['sycophantic_removed'], 2)}) |")
+    lines.append("")
+
+
+def baselines_section(base: Path, ctx: Path, model: str, lines: list):
+    rows = []
+    for t in ("proved", "proved_strict", "failing", "sycophancy"):
+        b, c = _load(base / model / "baselines" / f"{t}.json"), _load(ctx / model / "baselines" / f"{t}.json")
+        if b and c:
+            rows.append((t, b, c))
+    if not rows:
+        return
+    lines += ["### Covariate baselines (prompt_last; nuisance = surface features, difficulty = subset/step counts/other-step verdicts, "
+              "covariates = both, oracle = adds the step's own benchmark verdict family)", "",
+              "| task | probe (no ctx → ctx) | nuisance | difficulty | covariates | gain beyond covariates (no ctx → ctx) | residual probe AUROC after covariates (no ctx → ctx) |",
+              "|---|---|---|---|---|---|---|"]
+    for t, b, c in rows:
+        lines.append(f"| {t} | {_f(b['probe_auc'])} → {_f(c['probe_auc'])} | {_f(b['nuisance_auc'])} → {_f(c['nuisance_auc'])} | "
+                     f"{_f(b['difficulty_auc'])} → {_f(c['difficulty_auc'])} | {_f(b['covariates_auc'])} → {_f(c['covariates_auc'])} | "
+                     f"{_f(b['probe_gain_beyond_covariates'])} → {_f(c['probe_gain_beyond_covariates'])} | "
+                     f"{_f(b['residual_probe_auc_covariates'])} → {_f(c['residual_probe_auc_covariates'])} |")
     lines.append("")
 
 
@@ -177,6 +200,7 @@ def main():
     uncertainty_section(base, ctx, a.model, lines)
     controls_section(base, ctx, a.model, lines)
     abstain_section(base, ctx, a.model, lines)
+    baselines_section(base, ctx, a.model, lines)
     probes_section(base, ctx, a.model, lines, store="probes_tf", anchors=["statement_mean", "output_last"], tasks=["proved_unp", "failing_unp"])
     prove_section(base, ctx, a.model, lines)
     Path(a.out).write_text("\n".join(lines) + "\n")
