@@ -20,6 +20,8 @@ Kimina-Autoformalizer-7B, Herald_translator). Three objects of audit:
    formalization is appended to the prompt and the residual stream is read on
    it (`statement_mean`, `output_last`).
 
+All runs audited here used the bare-step prompt of run `af_v1`; see the last
+Limitations bullet for the benchmark's `<context>` prompt and its effect.
 All numbers below were computed by `scripts/audit_qualitative.py` and
 `scripts/audit_tf.py` (outputs `audit/audit_checks12.json`,
 `audit/audit_tf.json` under the scratch root) from the saved probe directions
@@ -385,3 +387,14 @@ Proved 0.85, Refuted 0.38, Unknown 0.33, TC_Fail 0.17, AF_Fail 0.00.
 - Scores are from single probes at validation-selected layers; the
   qualitative patterns were not re-checked across split seeds, although the
   aggregate AUROCs were (background.md §4.2).
+- **Prompt mismatch (found after this audit, 2026-11-09).** The af_v1 prompts
+  carried the bare step, whereas the benchmark formalized each step inside a
+  `<context>` block of its parent steps. Several examples above (P4, S5, the
+  "200 + 700 = 900" false positive) are cases where the verdict was decided by
+  premises the bare prompt could not see. Re-running Goedel with the
+  benchmark's prompt (`context_comparison.md`) raises the corruption-detecting
+  probes by 0.05–0.12 AUROC and cuts the gate's false alarms on true steps
+  from 8 % to 3 %, but leaves the three verdicts here unchanged: the proved
+  direction within true steps stays at 0.72, the sycophancy direction still
+  ranks repaired corrupted steps as more corrupted-looking than refuted ones
+  (0.36 vs 0.33), and the teacher-forced probes are unchanged.

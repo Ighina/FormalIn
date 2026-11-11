@@ -27,7 +27,10 @@ can the direction that reads it be used to steer the formalization?
 | `stepfun` | `stepfun-ai/StepFun-Formalizer-7B` (thinking, `<think>` appended to the prompt) |
 
 Prompts and chat formatting are the benchmark's verbatim
-(`leansteer/models/registry.py`).
+(`leansteer/models/registry.py`). The benchmark filled them with the step
+*and* a `<context>` block of its parent steps; run `af_v1` used the bare step,
+run `af_ctx` (`configs/context.yaml`, `data.context: true`) the benchmark's
+exact text — see "Context prompts" below.
 
 ### Tasks (built per model, `leansteer/data/faithform.py`)
 
@@ -852,6 +855,28 @@ uniformly sampled rather than class-balanced.)
 Pitfall hit on the way: under transformers ≥ 5 Herald's tokenizer resolves to
 the slow `LlamaTokenizer`, which drops every space; `load_tokenizer` now forces
 the `tokenizer.json` backend and asserts that prompts round-trip.
+
+### Context prompts (run `af_ctx`, Goedel; `context_comparison.md`)
+
+FaithformBench formalized each step inside a `<context>` block of its parent
+steps; af_v1 omitted it. Re-running Goedel with the benchmark's exact prompt
+(5 split seeds, prompt_last):
+
+| | no context (af_v1) | context (af_ctx) |
+|---|---|---|
+| proved / proved_strict / sycophancy / failing AUROC | 0.73 / 0.78 / 0.78 / 0.67 | 0.78 / 0.86 / 0.86 / 0.69 |
+| corruption detector (`perturbed_detect`) | 0.75 | 0.83 |
+| proved direction within true steps | 0.72 | 0.72 |
+| sycophancy direction, Proved vs Refuted within corrupted | 0.39 | 0.39 |
+| teacher-forced proved_unp / failing_unp | 0.86 / 0.92 | 0.86 / 0.94 |
+| abstention UFLB at 20 % (base 0.197) | 0.166 | 0.177 |
+| steering: corrupted-step refutation range along proved dir (perm p) | +0.12 (<0.001) | +0.05 (0.047) |
+| α = 0 verdict agreement with the benchmark (proved / sycophancy rows) | 0.63 / 0.58 | 0.65 / 0.63 |
+
+The premises make the pre-generation state a much better corruption detector
+(text baselines move ≤ 0.05), but do not change what it knows about
+provability among true steps or about silent repair, and steering effects
+shrink. `scripts/compare_context.py` regenerates the full tables.
 
 ## Layout
 
